@@ -1,0 +1,26 @@
+# Secrets — never commit
+.env
+.env.local
+.env.*.local
+*.pem
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Local data / runtime
+biqs.db
+biqs.db-*
+storage/reports/*.pdf
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store

@@ -1,0 +1,13 @@
+1:"$Sreact.fragment"
+2:I[1959,[],"ClientPageRoot"]
+3:I[9479,["176","static/chunks/176-b293c0b8f74aca36.js?dpl=dpl_4v1HSo6kRujLusj7ATucMuXfXA9Q","115","static/chunks/115-418992bba8871877.js?dpl=dpl_4v1HSo6kRujLusj7ATucMuXfXA9Q","170","static/chunks/app/agency/%5Bid%5D/page-9cd5671a18a29fb7.js?dpl=dpl_4v1HSo6kRujLusj7ATucMuXfXA9Q"],"default"]
+4:I[4431,[],"OutletBoundary"]
+6:I[5278,[],"AsyncMetadataOutlet"]
+8:I[4431,[],"ViewportBoundary"]
+a:I[4431,[],"MetadataBoundary"]
+b:"$Sreact.suspense"
+0:{"b":"S4M9reA0GkhmOKISZvV88","f":[["children","agency","children",["id","co-updatepromise","d"],"children","__PAGE__",["__PAGE__",{}],["__PAGE__",["$","$1","c",{"children":[["$","$L2",null,{"Component":"$3","searchParams":{},"params":{"id":"co-updatepromise"}}],null,["$","$L4",null,{"children":["$L5",["$","$L6",null,{"promise":"$@7"}]]}]]}],{},null,false],["$","$1","h",{"children":[null,["$","$1","-Lsd5os3z8dBib8aaIb5gv",{"children":[["$","$L8",null,{"children":"$L9"}],["$","meta",null,{"name":"next-size-adjust","content":""}]]}],["$","$La","-Lsd5os3z8dBib8aaIb5gm",{"children":["$","div",null,{"hidden":true,"children":["$","$b",null,{"fallback":null,"children":"$Lc"}]}]}]]}],false]],"S":false}
+9:[["$","meta","0",{"charSet":"utf-8"}],["$","meta","1",{"name":"viewport","content":"width=device-width, initial-scale=1, maximum-scale=5"}],["$","meta","2",{"name":"theme-color","content":"#002e9e"}]]
+5:null
+7:{"metadata":[["$","title","0",{"children":"Databiqs Product MVP"}],["$","meta","1",{"name":"description","content":"Databiqs Product MVP — goal-weighted competitive intelligence and next-best actions for agencies, influencers, and social teams."}]],"error":null,"digest":"$undefined"}
+c:"$7:metadata"

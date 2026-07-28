@@ -1,0 +1,1049 @@
+[
+  {
+    "competitorId": "comp-1",
+    "competitorName": "MyKaarma",
+    "rows": [
+      {
+        "featureName": "Harmony AI",
+        "category": "AI / CX",
+        "ourStatus": "parity",
+        "competitorStatus": "leading",
+        "note": "Both push AI-assisted dealer communication.",
+        "howCompetitorLeads": "MyKaarma markets AI assist tightly around texting workflows advisors already live in, so buyers experience AI as an inbox upgrade, not a separate CX suite.",
+        "howToImprove": "Package Harmony AI as suggested replies inside advisor messaging, show side-by-side response-time proof, and put that pack on the pricing page."
+      },
+      {
+        "featureName": "SMS / Customer Messaging",
+        "category": "Communication",
+        "ourStatus": "parity",
+        "competitorStatus": "leading",
+        "note": "MyKaarma is widely associated with dealership texting.",
+        "howCompetitorLeads": "Their brand equity in two-way SMS is stronger in many dealer conversations.",
+        "howToImprove": "Lead with TCPA-safe RO status messaging + Virtual Glovebox handoff, not generic texting claims."
+      },
+      {
+        "featureName": "PromisePay",
+        "category": "Payments",
+        "ourStatus": "leading",
+        "competitorStatus": "parity",
+        "note": "Both collect payments; UpdatePromise bundles merchant processing more deeply into fixed ops CX.",
+        "howCompetitorLeads": "MyKaarma often wins on payment-link simplicity inside conversations.",
+        "howToImprove": "Demo PromisePay + contact-free devices as part of appointment-to-payment, not as a standalone processor."
+      },
+      {
+        "featureName": "Intelligent Appointments",
+        "category": "Scheduling",
+        "ourStatus": "leading",
+        "competitorStatus": "parity",
+        "note": "UpdatePromise emphasizes capacity-aware intelligent appointments.",
+        "howCompetitorLeads": "MyKaarma covers appointments but is not primarily positioned as OEM-capacity scheduling.",
+        "howToImprove": "Keep appointment intelligence tied to show-rate outcomes in every demo."
+      },
+      {
+        "featureName": "Digital Multi-Point Inspection",
+        "category": "Inspection",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "UpdatePromise owns media MPI in this pairing.",
+        "howCompetitorLeads": "MyKaarma does not lead with digital MPI the way Darwin or UpdatePromise do.",
+        "howToImprove": "Use MPI+media as the wedge whenever MyKaarma is shortlisted only for texting."
+      }
+    ]
+  },
+  {
+    "competitorId": "comp-2",
+    "competitorName": "Xtime",
+    "rows": [
+      {
+        "featureName": "Intelligent Appointments",
+        "category": "Scheduling",
+        "ourStatus": "parity",
+        "competitorStatus": "leading",
+        "note": "Xtime is deeply embedded in OEM service scheduling.",
+        "howCompetitorLeads": "OEM-connected scheduling and dealer-network distribution give Xtime default shortlist status for many franchise rooftops.",
+        "howToImprove": "Do not compete as 'another scheduler'. Compete as appointment \u2192 check-in \u2192 MPI \u2192 AI update \u2192 pay."
+      },
+      {
+        "featureName": "OEM Service Integrations",
+        "category": "OEM",
+        "ourStatus": "leading",
+        "competitorStatus": "parity",
+        "note": "UpdatePromise lists broad OEM service certifications/integrations on its site.",
+        "howCompetitorLeads": "Xtime's Cox/OEM scheduling footprint is historically strong for booking alone.",
+        "howToImprove": "Put OEM badges above the fold and pair each with a live DMS demo story."
+      },
+      {
+        "featureName": "Harmony AI",
+        "category": "AI / CX",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "UpdatePromise has Harmony AI; Xtime's core story is scheduling.",
+        "howCompetitorLeads": "Xtime leads on scheduling distribution, not AI CX messaging.",
+        "howToImprove": "In competitive deals, ask: after the appointment is booked, who owns the guest experience?"
+      },
+      {
+        "featureName": "Tablet Vehicle Check-In (VCI)",
+        "category": "Check-In",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Drive-side tablet check-in is an UpdatePromise differentiator vs pure scheduling.",
+        "howCompetitorLeads": "Xtime does not replace VCI + media walkaround.",
+        "howToImprove": "Open demos on the drive, not on the calendar widget."
+      }
+    ]
+  },
+  {
+    "competitorId": "comp-3",
+    "competitorName": "Tekion",
+    "rows": [
+      {
+        "featureName": "DMS Integrations",
+        "category": "Integrations",
+        "ourStatus": "parity",
+        "competitorStatus": "leading",
+        "note": "Tekion is a cloud DMS platform; UpdatePromise integrates into DMS environments.",
+        "howCompetitorLeads": "Tekion can win when a group wants one cloud system of record for the whole store.",
+        "howToImprove": "Position UpdatePromise as the fixed-ops CX layer that makes whatever DMS they run convert better."
+      },
+      {
+        "featureName": "Homepage / setup messaging",
+        "category": "Messaging",
+        "ourStatus": "lagging",
+        "competitorStatus": "leading",
+        "note": "Tekion often emphasizes modern cloud speed-to-value.",
+        "howCompetitorLeads": "Faster-setup narrative converts enterprise buyers evaluating rip-and-replace platforms.",
+        "howToImprove": "Hero should lead with 'See every module in your DMS in 30 minutes' \u2014 UpdatePromise's own demo promise."
+      },
+      {
+        "featureName": "Harmony AI",
+        "category": "AI / CX",
+        "ourStatus": "leading",
+        "competitorStatus": "parity",
+        "note": "Both discuss AI; UpdatePromise's Harmony AI is CX-specific to fixed ops communication.",
+        "howCompetitorLeads": "Tekion can bundle AI inside a broader retail cloud story.",
+        "howToImprove": "Keep AI proof tied to CSI, response rate, and RO approval lift."
+      }
+    ]
+  },
+  {
+    "competitorId": "comp-4",
+    "competitorName": "DealerSocket",
+    "rows": [
+      {
+        "featureName": "Intelligent Appointments",
+        "category": "Scheduling",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "DealerSocket overlaps in Scheduling via Service Scheduling.",
+        "howCompetitorLeads": "DealerSocket presents Service Scheduling as a focused capability in Scheduling, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how Intelligent Appointments connects to MPI, Harmony AI, and payments so DealerSocket's point solution looks incomplete."
+      },
+      {
+        "featureName": "Tablet Vehicle Check-In (VCI)",
+        "category": "Check-In",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "DealerSocket does not publicly lead with an equivalent to Tablet Vehicle Check-In (VCI).",
+        "howCompetitorLeads": "DealerSocket concentrates on CRM, so this category is not their primary battlefield.",
+        "howToImprove": "Use Tablet Vehicle Check-In (VCI) as a qualifying question in deals where DealerSocket is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Digital Multi-Point Inspection",
+        "category": "Inspection",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "DealerSocket does not publicly lead with an equivalent to Digital Multi-Point Inspection.",
+        "howCompetitorLeads": "DealerSocket concentrates on CRM, so this category is not their primary battlefield.",
+        "howToImprove": "Use Digital Multi-Point Inspection as a qualifying question in deals where DealerSocket is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Harmony AI",
+        "category": "AI / CX",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "DealerSocket does not publicly lead with an equivalent to Harmony AI.",
+        "howCompetitorLeads": "DealerSocket concentrates on CRM, so this category is not their primary battlefield.",
+        "howToImprove": "Use Harmony AI as a qualifying question in deals where DealerSocket is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Virtual Glovebox",
+        "category": "Customer Portal",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "DealerSocket does not publicly lead with an equivalent to Virtual Glovebox.",
+        "howCompetitorLeads": "DealerSocket concentrates on CRM, so this category is not their primary battlefield.",
+        "howToImprove": "Use Virtual Glovebox as a qualifying question in deals where DealerSocket is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "PromisePay",
+        "category": "Payments",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "DealerSocket does not publicly lead with an equivalent to PromisePay.",
+        "howCompetitorLeads": "DealerSocket concentrates on CRM, so this category is not their primary battlefield.",
+        "howToImprove": "Use PromisePay as a qualifying question in deals where DealerSocket is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      }
+    ]
+  },
+  {
+    "competitorId": "comp-5",
+    "competitorName": "CDK Global",
+    "rows": [
+      {
+        "featureName": "Intelligent Appointments",
+        "category": "Scheduling",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "CDK Global does not publicly lead with an equivalent to Intelligent Appointments.",
+        "howCompetitorLeads": "CDK Global concentrates on Drive / DMS Core, so this category is not their primary battlefield.",
+        "howToImprove": "Use Intelligent Appointments as a qualifying question in deals where CDK Global is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Tablet Vehicle Check-In (VCI)",
+        "category": "Check-In",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "CDK Global overlaps in Check-In via Service Suite.",
+        "howCompetitorLeads": "CDK Global presents Service Suite as a focused capability in Check-In, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how Tablet Vehicle Check-In (VCI) connects to MPI, Harmony AI, and payments so CDK Global's point solution looks incomplete."
+      },
+      {
+        "featureName": "Digital Multi-Point Inspection",
+        "category": "Inspection",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "CDK Global overlaps in Inspection via Parts & Service Ops.",
+        "howCompetitorLeads": "CDK Global presents Parts & Service Ops as a focused capability in Inspection, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how Digital Multi-Point Inspection connects to MPI, Harmony AI, and payments so CDK Global's point solution looks incomplete."
+      },
+      {
+        "featureName": "Harmony AI",
+        "category": "AI / CX",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "CDK Global does not publicly lead with an equivalent to Harmony AI.",
+        "howCompetitorLeads": "CDK Global concentrates on Drive / DMS Core, so this category is not their primary battlefield.",
+        "howToImprove": "Use Harmony AI as a qualifying question in deals where CDK Global is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Virtual Glovebox",
+        "category": "Customer Portal",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "CDK Global does not publicly lead with an equivalent to Virtual Glovebox.",
+        "howCompetitorLeads": "CDK Global concentrates on Drive / DMS Core, so this category is not their primary battlefield.",
+        "howToImprove": "Use Virtual Glovebox as a qualifying question in deals where CDK Global is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "PromisePay",
+        "category": "Payments",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "CDK Global does not publicly lead with an equivalent to PromisePay.",
+        "howCompetitorLeads": "CDK Global concentrates on Drive / DMS Core, so this category is not their primary battlefield.",
+        "howToImprove": "Use PromisePay as a qualifying question in deals where CDK Global is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      }
+    ]
+  },
+  {
+    "competitorId": "comp-6",
+    "competitorName": "Reynolds and Reynolds",
+    "rows": [
+      {
+        "featureName": "Intelligent Appointments",
+        "category": "Scheduling",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "Reynolds and Reynolds overlaps in Scheduling via Service Scheduling.",
+        "howCompetitorLeads": "Reynolds and Reynolds presents Service Scheduling as a focused capability in Scheduling, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how Intelligent Appointments connects to MPI, Harmony AI, and payments so Reynolds and Reynolds's point solution looks incomplete."
+      },
+      {
+        "featureName": "Tablet Vehicle Check-In (VCI)",
+        "category": "Check-In",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Reynolds and Reynolds does not publicly lead with an equivalent to Tablet Vehicle Check-In (VCI).",
+        "howCompetitorLeads": "Reynolds and Reynolds concentrates on ERA DMS, so this category is not their primary battlefield.",
+        "howToImprove": "Use Tablet Vehicle Check-In (VCI) as a qualifying question in deals where Reynolds and Reynolds is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Digital Multi-Point Inspection",
+        "category": "Inspection",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Reynolds and Reynolds does not publicly lead with an equivalent to Digital Multi-Point Inspection.",
+        "howCompetitorLeads": "Reynolds and Reynolds concentrates on ERA DMS, so this category is not their primary battlefield.",
+        "howToImprove": "Use Digital Multi-Point Inspection as a qualifying question in deals where Reynolds and Reynolds is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Harmony AI",
+        "category": "AI / CX",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Reynolds and Reynolds does not publicly lead with an equivalent to Harmony AI.",
+        "howCompetitorLeads": "Reynolds and Reynolds concentrates on ERA DMS, so this category is not their primary battlefield.",
+        "howToImprove": "Use Harmony AI as a qualifying question in deals where Reynolds and Reynolds is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Virtual Glovebox",
+        "category": "Customer Portal",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "Reynolds and Reynolds overlaps in Customer Portal via Digital Guest Tools.",
+        "howCompetitorLeads": "Reynolds and Reynolds presents Digital Guest Tools as a focused capability in Customer Portal, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how Virtual Glovebox connects to MPI, Harmony AI, and payments so Reynolds and Reynolds's point solution looks incomplete."
+      },
+      {
+        "featureName": "PromisePay",
+        "category": "Payments",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "Reynolds and Reynolds overlaps in Payments via Payments.",
+        "howCompetitorLeads": "Reynolds and Reynolds presents Payments as a focused capability in Payments, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how PromisePay connects to MPI, Harmony AI, and payments so Reynolds and Reynolds's point solution looks incomplete."
+      }
+    ]
+  },
+  {
+    "competitorId": "comp-7",
+    "competitorName": "AutoLoop",
+    "rows": [
+      {
+        "featureName": "Fixed Ops Reporting",
+        "category": "Analytics",
+        "ourStatus": "parity",
+        "competitorStatus": "leading",
+        "note": "AutoLoop is strong in fixed ops marketing analytics and retention programs.",
+        "howCompetitorLeads": "They win when the buyer brief is marketing ROI, reviews, and reactivation.",
+        "howToImprove": "Publish AI + fixed ops content cluster and show Pillar of Success KPIs as marketing outcomes."
+      },
+      {
+        "featureName": "SEO / Content",
+        "category": "Communication",
+        "ourStatus": "lagging",
+        "competitorStatus": "leading",
+        "note": "AutoLoop invests heavily in service marketing content.",
+        "howCompetitorLeads": "Content velocity around retention/AI CRM themes captures search demand UpdatePromise under-owns.",
+        "howToImprove": "Ship an 'AI CRM for Fixed Ops' pillar with Harmony AI proof points."
+      }
+    ]
+  },
+  {
+    "competitorId": "comp-8",
+    "competitorName": "Darwin Automotive",
+    "rows": [
+      {
+        "featureName": "Digital Multi-Point Inspection",
+        "category": "Inspection",
+        "ourStatus": "parity",
+        "competitorStatus": "leading",
+        "note": "Darwin is known specifically for digital MPI and approvals.",
+        "howCompetitorLeads": "They lead conversations that start with inspection close-rate, not full CX suites.",
+        "howToImprove": "You already have MPI + media + Virtual Glovebox \u2014 put that checklist on pricing and fight feature-by-feature, not suite-by-suite."
+      },
+      {
+        "featureName": "Virtual Glovebox",
+        "category": "Customer Portal",
+        "ourStatus": "leading",
+        "competitorStatus": "parity",
+        "note": "UpdatePromise extends beyond inspection into financing and payment in the guest portal.",
+        "howCompetitorLeads": "Darwin is sharp on approve/decline UX.",
+        "howToImprove": "Always demo estimate \u2192 finance offer \u2192 pay, not inspection alone."
+      },
+      {
+        "featureName": "Enterprise SSO",
+        "category": "Security",
+        "ourStatus": "missing",
+        "competitorStatus": "leading",
+        "note": "Darwin publicly emphasizes enterprise-friendly security messaging including SSO callouts on product pages.",
+        "howCompetitorLeads": "SSO messaging reduces friction for dealer-group IT reviews.",
+        "howToImprove": "Prioritize SAML SSO and publish a security one-pager this quarter."
+      }
+    ]
+  },
+  {
+    "competitorId": "comp-9",
+    "competitorName": "Naboo",
+    "rows": [
+      {
+        "featureName": "Intelligent Appointments",
+        "category": "Scheduling",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Naboo does not publicly lead with an equivalent to Intelligent Appointments.",
+        "howCompetitorLeads": "Naboo concentrates on Omnichannel Inbox, so this category is not their primary battlefield.",
+        "howToImprove": "Use Intelligent Appointments as a qualifying question in deals where Naboo is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Tablet Vehicle Check-In (VCI)",
+        "category": "Check-In",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Naboo does not publicly lead with an equivalent to Tablet Vehicle Check-In (VCI).",
+        "howCompetitorLeads": "Naboo concentrates on Omnichannel Inbox, so this category is not their primary battlefield.",
+        "howToImprove": "Use Tablet Vehicle Check-In (VCI) as a qualifying question in deals where Naboo is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Digital Multi-Point Inspection",
+        "category": "Inspection",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Naboo does not publicly lead with an equivalent to Digital Multi-Point Inspection.",
+        "howCompetitorLeads": "Naboo concentrates on Omnichannel Inbox, so this category is not their primary battlefield.",
+        "howToImprove": "Use Digital Multi-Point Inspection as a qualifying question in deals where Naboo is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Harmony AI",
+        "category": "AI / CX",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "Naboo overlaps in AI / CX via Journey Automation.",
+        "howCompetitorLeads": "Naboo presents Journey Automation as a focused capability in AI / CX, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how Harmony AI connects to MPI, Harmony AI, and payments so Naboo's point solution looks incomplete."
+      },
+      {
+        "featureName": "Virtual Glovebox",
+        "category": "Customer Portal",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Naboo does not publicly lead with an equivalent to Virtual Glovebox.",
+        "howCompetitorLeads": "Naboo concentrates on Omnichannel Inbox, so this category is not their primary battlefield.",
+        "howToImprove": "Use Virtual Glovebox as a qualifying question in deals where Naboo is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "PromisePay",
+        "category": "Payments",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "Naboo overlaps in Payments via Payment Links.",
+        "howCompetitorLeads": "Naboo presents Payment Links as a focused capability in Payments, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how PromisePay connects to MPI, Harmony AI, and payments so Naboo's point solution looks incomplete."
+      }
+    ]
+  },
+  {
+    "competitorId": "comp-10",
+    "competitorName": "Shopmonkey",
+    "rows": [
+      {
+        "featureName": "Intelligent Appointments",
+        "category": "Scheduling",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Shopmonkey does not publicly lead with an equivalent to Intelligent Appointments.",
+        "howCompetitorLeads": "Shopmonkey concentrates on Shop Management OS, so this category is not their primary battlefield.",
+        "howToImprove": "Use Intelligent Appointments as a qualifying question in deals where Shopmonkey is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Tablet Vehicle Check-In (VCI)",
+        "category": "Check-In",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "Shopmonkey overlaps in Check-In via Shop Management OS.",
+        "howCompetitorLeads": "Shopmonkey presents Shop Management OS as a focused capability in Check-In, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how Tablet Vehicle Check-In (VCI) connects to MPI, Harmony AI, and payments so Shopmonkey's point solution looks incomplete."
+      },
+      {
+        "featureName": "Digital Multi-Point Inspection",
+        "category": "Inspection",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "Shopmonkey overlaps in Inspection via Digital Inspections.",
+        "howCompetitorLeads": "Shopmonkey presents Digital Inspections as a focused capability in Inspection, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how Digital Multi-Point Inspection connects to MPI, Harmony AI, and payments so Shopmonkey's point solution looks incomplete."
+      },
+      {
+        "featureName": "Harmony AI",
+        "category": "AI / CX",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Shopmonkey does not publicly lead with an equivalent to Harmony AI.",
+        "howCompetitorLeads": "Shopmonkey concentrates on Shop Management OS, so this category is not their primary battlefield.",
+        "howToImprove": "Use Harmony AI as a qualifying question in deals where Shopmonkey is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Virtual Glovebox",
+        "category": "Customer Portal",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Shopmonkey does not publicly lead with an equivalent to Virtual Glovebox.",
+        "howCompetitorLeads": "Shopmonkey concentrates on Shop Management OS, so this category is not their primary battlefield.",
+        "howToImprove": "Use Virtual Glovebox as a qualifying question in deals where Shopmonkey is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "PromisePay",
+        "category": "Payments",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "Shopmonkey overlaps in Payments via Card Payments.",
+        "howCompetitorLeads": "Shopmonkey presents Card Payments as a focused capability in Payments, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how PromisePay connects to MPI, Harmony AI, and payments so Shopmonkey's point solution looks incomplete."
+      }
+    ]
+  },
+  {
+    "competitorId": "comp-11",
+    "competitorName": "Tekmetric",
+    "rows": [
+      {
+        "featureName": "Intelligent Appointments",
+        "category": "Scheduling",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Tekmetric does not publicly lead with an equivalent to Intelligent Appointments.",
+        "howCompetitorLeads": "Tekmetric concentrates on RO Management, so this category is not their primary battlefield.",
+        "howToImprove": "Use Intelligent Appointments as a qualifying question in deals where Tekmetric is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Tablet Vehicle Check-In (VCI)",
+        "category": "Check-In",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "Tekmetric overlaps in Check-In via RO Management.",
+        "howCompetitorLeads": "Tekmetric presents RO Management as a focused capability in Check-In, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how Tablet Vehicle Check-In (VCI) connects to MPI, Harmony AI, and payments so Tekmetric's point solution looks incomplete."
+      },
+      {
+        "featureName": "Digital Multi-Point Inspection",
+        "category": "Inspection",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "Tekmetric overlaps in Inspection via Digital Vehicle Inspection.",
+        "howCompetitorLeads": "Tekmetric presents Digital Vehicle Inspection as a focused capability in Inspection, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how Digital Multi-Point Inspection connects to MPI, Harmony AI, and payments so Tekmetric's point solution looks incomplete."
+      },
+      {
+        "featureName": "Harmony AI",
+        "category": "AI / CX",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Tekmetric does not publicly lead with an equivalent to Harmony AI.",
+        "howCompetitorLeads": "Tekmetric concentrates on RO Management, so this category is not their primary battlefield.",
+        "howToImprove": "Use Harmony AI as a qualifying question in deals where Tekmetric is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Virtual Glovebox",
+        "category": "Customer Portal",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "Tekmetric overlaps in Customer Portal via Customer Estimates Portal.",
+        "howCompetitorLeads": "Tekmetric presents Customer Estimates Portal as a focused capability in Customer Portal, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how Virtual Glovebox connects to MPI, Harmony AI, and payments so Tekmetric's point solution looks incomplete."
+      },
+      {
+        "featureName": "PromisePay",
+        "category": "Payments",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "Tekmetric overlaps in Payments via Payments.",
+        "howCompetitorLeads": "Tekmetric presents Payments as a focused capability in Payments, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how PromisePay connects to MPI, Harmony AI, and payments so Tekmetric's point solution looks incomplete."
+      }
+    ]
+  },
+  {
+    "competitorId": "comp-12",
+    "competitorName": "Fullbay",
+    "rows": [
+      {
+        "featureName": "Intelligent Appointments",
+        "category": "Scheduling",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Fullbay does not publicly lead with an equivalent to Intelligent Appointments.",
+        "howCompetitorLeads": "Fullbay concentrates on Heavy-Duty Workflows, so this category is not their primary battlefield.",
+        "howToImprove": "Use Intelligent Appointments as a qualifying question in deals where Fullbay is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Tablet Vehicle Check-In (VCI)",
+        "category": "Check-In",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "Fullbay overlaps in Check-In via Heavy-Duty Workflows.",
+        "howCompetitorLeads": "Fullbay presents Heavy-Duty Workflows as a focused capability in Check-In, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how Tablet Vehicle Check-In (VCI) connects to MPI, Harmony AI, and payments so Fullbay's point solution looks incomplete."
+      },
+      {
+        "featureName": "Digital Multi-Point Inspection",
+        "category": "Inspection",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "Fullbay overlaps in Inspection via Fleet Inspections.",
+        "howCompetitorLeads": "Fullbay presents Fleet Inspections as a focused capability in Inspection, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how Digital Multi-Point Inspection connects to MPI, Harmony AI, and payments so Fullbay's point solution looks incomplete."
+      },
+      {
+        "featureName": "Harmony AI",
+        "category": "AI / CX",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Fullbay does not publicly lead with an equivalent to Harmony AI.",
+        "howCompetitorLeads": "Fullbay concentrates on Heavy-Duty Workflows, so this category is not their primary battlefield.",
+        "howToImprove": "Use Harmony AI as a qualifying question in deals where Fullbay is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Virtual Glovebox",
+        "category": "Customer Portal",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "Fullbay overlaps in Customer Portal via Fleet Customer Portals.",
+        "howCompetitorLeads": "Fullbay presents Fleet Customer Portals as a focused capability in Customer Portal, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how Virtual Glovebox connects to MPI, Harmony AI, and payments so Fullbay's point solution looks incomplete."
+      },
+      {
+        "featureName": "PromisePay",
+        "category": "Payments",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "Fullbay overlaps in Payments via Fleet Billing.",
+        "howCompetitorLeads": "Fullbay presents Fleet Billing as a focused capability in Payments, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how PromisePay connects to MPI, Harmony AI, and payments so Fullbay's point solution looks incomplete."
+      }
+    ]
+  },
+  {
+    "competitorId": "comp-13",
+    "competitorName": "AutoLeap",
+    "rows": [
+      {
+        "featureName": "Intelligent Appointments",
+        "category": "Scheduling",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "AutoLeap does not publicly lead with an equivalent to Intelligent Appointments.",
+        "howCompetitorLeads": "AutoLeap concentrates on Shop Management, so this category is not their primary battlefield.",
+        "howToImprove": "Use Intelligent Appointments as a qualifying question in deals where AutoLeap is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Tablet Vehicle Check-In (VCI)",
+        "category": "Check-In",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "AutoLeap overlaps in Check-In via Shop Management.",
+        "howCompetitorLeads": "AutoLeap presents Shop Management as a focused capability in Check-In, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how Tablet Vehicle Check-In (VCI) connects to MPI, Harmony AI, and payments so AutoLeap's point solution looks incomplete."
+      },
+      {
+        "featureName": "Digital Multi-Point Inspection",
+        "category": "Inspection",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "AutoLeap overlaps in Inspection via DVI.",
+        "howCompetitorLeads": "AutoLeap presents DVI as a focused capability in Inspection, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how Digital Multi-Point Inspection connects to MPI, Harmony AI, and payments so AutoLeap's point solution looks incomplete."
+      },
+      {
+        "featureName": "Harmony AI",
+        "category": "AI / CX",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "AutoLeap overlaps in AI / CX via AI Assistant Features.",
+        "howCompetitorLeads": "AutoLeap presents AI Assistant Features as a focused capability in AI / CX, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how Harmony AI connects to MPI, Harmony AI, and payments so AutoLeap's point solution looks incomplete."
+      },
+      {
+        "featureName": "Virtual Glovebox",
+        "category": "Customer Portal",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "AutoLeap does not publicly lead with an equivalent to Virtual Glovebox.",
+        "howCompetitorLeads": "AutoLeap concentrates on Shop Management, so this category is not their primary battlefield.",
+        "howToImprove": "Use Virtual Glovebox as a qualifying question in deals where AutoLeap is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "PromisePay",
+        "category": "Payments",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "AutoLeap overlaps in Payments via Payments.",
+        "howCompetitorLeads": "AutoLeap presents Payments as a focused capability in Payments, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how PromisePay connects to MPI, Harmony AI, and payments so AutoLeap's point solution looks incomplete."
+      }
+    ]
+  },
+  {
+    "competitorId": "comp-14",
+    "competitorName": "Mitchell1",
+    "rows": [
+      {
+        "featureName": "Intelligent Appointments",
+        "category": "Scheduling",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Mitchell1 does not publicly lead with an equivalent to Intelligent Appointments.",
+        "howCompetitorLeads": "Mitchell1 concentrates on OEM Repair Information, so this category is not their primary battlefield.",
+        "howToImprove": "Use Intelligent Appointments as a qualifying question in deals where Mitchell1 is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Tablet Vehicle Check-In (VCI)",
+        "category": "Check-In",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "Mitchell1 overlaps in Check-In via Shop Management.",
+        "howCompetitorLeads": "Mitchell1 presents Shop Management as a focused capability in Check-In, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how Tablet Vehicle Check-In (VCI) connects to MPI, Harmony AI, and payments so Mitchell1's point solution looks incomplete."
+      },
+      {
+        "featureName": "Digital Multi-Point Inspection",
+        "category": "Inspection",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "Mitchell1 overlaps in Inspection via OEM Repair Information.",
+        "howCompetitorLeads": "Mitchell1 presents OEM Repair Information as a focused capability in Inspection, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how Digital Multi-Point Inspection connects to MPI, Harmony AI, and payments so Mitchell1's point solution looks incomplete."
+      },
+      {
+        "featureName": "Harmony AI",
+        "category": "AI / CX",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Mitchell1 does not publicly lead with an equivalent to Harmony AI.",
+        "howCompetitorLeads": "Mitchell1 concentrates on OEM Repair Information, so this category is not their primary battlefield.",
+        "howToImprove": "Use Harmony AI as a qualifying question in deals where Mitchell1 is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Virtual Glovebox",
+        "category": "Customer Portal",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Mitchell1 does not publicly lead with an equivalent to Virtual Glovebox.",
+        "howCompetitorLeads": "Mitchell1 concentrates on OEM Repair Information, so this category is not their primary battlefield.",
+        "howToImprove": "Use Virtual Glovebox as a qualifying question in deals where Mitchell1 is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "PromisePay",
+        "category": "Payments",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Mitchell1 does not publicly lead with an equivalent to PromisePay.",
+        "howCompetitorLeads": "Mitchell1 concentrates on OEM Repair Information, so this category is not their primary battlefield.",
+        "howToImprove": "Use PromisePay as a qualifying question in deals where Mitchell1 is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      }
+    ]
+  },
+  {
+    "competitorId": "comp-15",
+    "competitorName": "AllData",
+    "rows": [
+      {
+        "featureName": "Intelligent Appointments",
+        "category": "Scheduling",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "AllData does not publicly lead with an equivalent to Intelligent Appointments.",
+        "howCompetitorLeads": "AllData concentrates on OEM Repair Data, so this category is not their primary battlefield.",
+        "howToImprove": "Use Intelligent Appointments as a qualifying question in deals where AllData is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Tablet Vehicle Check-In (VCI)",
+        "category": "Check-In",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "AllData does not publicly lead with an equivalent to Tablet Vehicle Check-In (VCI).",
+        "howCompetitorLeads": "AllData concentrates on OEM Repair Data, so this category is not their primary battlefield.",
+        "howToImprove": "Use Tablet Vehicle Check-In (VCI) as a qualifying question in deals where AllData is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Digital Multi-Point Inspection",
+        "category": "Inspection",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "AllData overlaps in Inspection via OEM Repair Data.",
+        "howCompetitorLeads": "AllData presents OEM Repair Data as a focused capability in Inspection, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how Digital Multi-Point Inspection connects to MPI, Harmony AI, and payments so AllData's point solution looks incomplete."
+      },
+      {
+        "featureName": "Harmony AI",
+        "category": "AI / CX",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "AllData does not publicly lead with an equivalent to Harmony AI.",
+        "howCompetitorLeads": "AllData concentrates on OEM Repair Data, so this category is not their primary battlefield.",
+        "howToImprove": "Use Harmony AI as a qualifying question in deals where AllData is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Virtual Glovebox",
+        "category": "Customer Portal",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "AllData does not publicly lead with an equivalent to Virtual Glovebox.",
+        "howCompetitorLeads": "AllData concentrates on OEM Repair Data, so this category is not their primary battlefield.",
+        "howToImprove": "Use Virtual Glovebox as a qualifying question in deals where AllData is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "PromisePay",
+        "category": "Payments",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "AllData does not publicly lead with an equivalent to PromisePay.",
+        "howCompetitorLeads": "AllData concentrates on OEM Repair Data, so this category is not their primary battlefield.",
+        "howToImprove": "Use PromisePay as a qualifying question in deals where AllData is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      }
+    ]
+  },
+  {
+    "competitorId": "comp-16",
+    "competitorName": "Identifix",
+    "rows": [
+      {
+        "featureName": "Intelligent Appointments",
+        "category": "Scheduling",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Identifix does not publicly lead with an equivalent to Intelligent Appointments.",
+        "howCompetitorLeads": "Identifix concentrates on Repair Hotspots, so this category is not their primary battlefield.",
+        "howToImprove": "Use Intelligent Appointments as a qualifying question in deals where Identifix is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Tablet Vehicle Check-In (VCI)",
+        "category": "Check-In",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Identifix does not publicly lead with an equivalent to Tablet Vehicle Check-In (VCI).",
+        "howCompetitorLeads": "Identifix concentrates on Repair Hotspots, so this category is not their primary battlefield.",
+        "howToImprove": "Use Tablet Vehicle Check-In (VCI) as a qualifying question in deals where Identifix is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Digital Multi-Point Inspection",
+        "category": "Inspection",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "Identifix overlaps in Inspection via Repair Hotspots.",
+        "howCompetitorLeads": "Identifix presents Repair Hotspots as a focused capability in Inspection, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how Digital Multi-Point Inspection connects to MPI, Harmony AI, and payments so Identifix's point solution looks incomplete."
+      },
+      {
+        "featureName": "Harmony AI",
+        "category": "AI / CX",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Identifix does not publicly lead with an equivalent to Harmony AI.",
+        "howCompetitorLeads": "Identifix concentrates on Repair Hotspots, so this category is not their primary battlefield.",
+        "howToImprove": "Use Harmony AI as a qualifying question in deals where Identifix is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Virtual Glovebox",
+        "category": "Customer Portal",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Identifix does not publicly lead with an equivalent to Virtual Glovebox.",
+        "howCompetitorLeads": "Identifix concentrates on Repair Hotspots, so this category is not their primary battlefield.",
+        "howToImprove": "Use Virtual Glovebox as a qualifying question in deals where Identifix is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "PromisePay",
+        "category": "Payments",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Identifix does not publicly lead with an equivalent to PromisePay.",
+        "howCompetitorLeads": "Identifix concentrates on Repair Hotspots, so this category is not their primary battlefield.",
+        "howToImprove": "Use PromisePay as a qualifying question in deals where Identifix is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      }
+    ]
+  },
+  {
+    "competitorId": "comp-17",
+    "competitorName": "Motor",
+    "rows": [
+      {
+        "featureName": "Intelligent Appointments",
+        "category": "Scheduling",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Motor does not publicly lead with an equivalent to Intelligent Appointments.",
+        "howCompetitorLeads": "Motor concentrates on Parts Catalog Data, so this category is not their primary battlefield.",
+        "howToImprove": "Use Intelligent Appointments as a qualifying question in deals where Motor is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Tablet Vehicle Check-In (VCI)",
+        "category": "Check-In",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Motor does not publicly lead with an equivalent to Tablet Vehicle Check-In (VCI).",
+        "howCompetitorLeads": "Motor concentrates on Parts Catalog Data, so this category is not their primary battlefield.",
+        "howToImprove": "Use Tablet Vehicle Check-In (VCI) as a qualifying question in deals where Motor is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Digital Multi-Point Inspection",
+        "category": "Inspection",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "Motor overlaps in Inspection via Labor Time Guides.",
+        "howCompetitorLeads": "Motor presents Labor Time Guides as a focused capability in Inspection, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how Digital Multi-Point Inspection connects to MPI, Harmony AI, and payments so Motor's point solution looks incomplete."
+      },
+      {
+        "featureName": "Harmony AI",
+        "category": "AI / CX",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Motor does not publicly lead with an equivalent to Harmony AI.",
+        "howCompetitorLeads": "Motor concentrates on Parts Catalog Data, so this category is not their primary battlefield.",
+        "howToImprove": "Use Harmony AI as a qualifying question in deals where Motor is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Virtual Glovebox",
+        "category": "Customer Portal",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Motor does not publicly lead with an equivalent to Virtual Glovebox.",
+        "howCompetitorLeads": "Motor concentrates on Parts Catalog Data, so this category is not their primary battlefield.",
+        "howToImprove": "Use Virtual Glovebox as a qualifying question in deals where Motor is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "PromisePay",
+        "category": "Payments",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "Motor does not publicly lead with an equivalent to PromisePay.",
+        "howCompetitorLeads": "Motor concentrates on Parts Catalog Data, so this category is not their primary battlefield.",
+        "howToImprove": "Use PromisePay as a qualifying question in deals where Motor is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      }
+    ]
+  },
+  {
+    "competitorId": "comp-18",
+    "competitorName": "CarAdvise",
+    "rows": [
+      {
+        "featureName": "Intelligent Appointments",
+        "category": "Scheduling",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "CarAdvise overlaps in Scheduling via Network Booking.",
+        "howCompetitorLeads": "CarAdvise presents Network Booking as a focused capability in Scheduling, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how Intelligent Appointments connects to MPI, Harmony AI, and payments so CarAdvise's point solution looks incomplete."
+      },
+      {
+        "featureName": "Tablet Vehicle Check-In (VCI)",
+        "category": "Check-In",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "CarAdvise does not publicly lead with an equivalent to Tablet Vehicle Check-In (VCI).",
+        "howCompetitorLeads": "CarAdvise concentrates on Network Booking, so this category is not their primary battlefield.",
+        "howToImprove": "Use Tablet Vehicle Check-In (VCI) as a qualifying question in deals where CarAdvise is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Digital Multi-Point Inspection",
+        "category": "Inspection",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "CarAdvise does not publicly lead with an equivalent to Digital Multi-Point Inspection.",
+        "howCompetitorLeads": "CarAdvise concentrates on Network Booking, so this category is not their primary battlefield.",
+        "howToImprove": "Use Digital Multi-Point Inspection as a qualifying question in deals where CarAdvise is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Harmony AI",
+        "category": "AI / CX",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "CarAdvise overlaps in AI / CX via Maintenance Recommendations.",
+        "howCompetitorLeads": "CarAdvise presents Maintenance Recommendations as a focused capability in AI / CX, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how Harmony AI connects to MPI, Harmony AI, and payments so CarAdvise's point solution looks incomplete."
+      },
+      {
+        "featureName": "Virtual Glovebox",
+        "category": "Customer Portal",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "CarAdvise overlaps in Customer Portal via Fleet Portal.",
+        "howCompetitorLeads": "CarAdvise presents Fleet Portal as a focused capability in Customer Portal, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how Virtual Glovebox connects to MPI, Harmony AI, and payments so CarAdvise's point solution looks incomplete."
+      },
+      {
+        "featureName": "PromisePay",
+        "category": "Payments",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "CarAdvise overlaps in Payments via Centralized Billing.",
+        "howCompetitorLeads": "CarAdvise presents Centralized Billing as a focused capability in Payments, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how PromisePay connects to MPI, Harmony AI, and payments so CarAdvise's point solution looks incomplete."
+      }
+    ]
+  },
+  {
+    "competitorId": "comp-19",
+    "competitorName": "DealerOn",
+    "rows": [
+      {
+        "featureName": "Intelligent Appointments",
+        "category": "Scheduling",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "DealerOn overlaps in Scheduling via Service Department Pages.",
+        "howCompetitorLeads": "DealerOn presents Service Department Pages as a focused capability in Scheduling, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how Intelligent Appointments connects to MPI, Harmony AI, and payments so DealerOn's point solution looks incomplete."
+      },
+      {
+        "featureName": "Tablet Vehicle Check-In (VCI)",
+        "category": "Check-In",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "DealerOn does not publicly lead with an equivalent to Tablet Vehicle Check-In (VCI).",
+        "howCompetitorLeads": "DealerOn concentrates on Dealer Websites, so this category is not their primary battlefield.",
+        "howToImprove": "Use Tablet Vehicle Check-In (VCI) as a qualifying question in deals where DealerOn is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Digital Multi-Point Inspection",
+        "category": "Inspection",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "DealerOn does not publicly lead with an equivalent to Digital Multi-Point Inspection.",
+        "howCompetitorLeads": "DealerOn concentrates on Dealer Websites, so this category is not their primary battlefield.",
+        "howToImprove": "Use Digital Multi-Point Inspection as a qualifying question in deals where DealerOn is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Harmony AI",
+        "category": "AI / CX",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "DealerOn does not publicly lead with an equivalent to Harmony AI.",
+        "howCompetitorLeads": "DealerOn concentrates on Dealer Websites, so this category is not their primary battlefield.",
+        "howToImprove": "Use Harmony AI as a qualifying question in deals where DealerOn is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      },
+      {
+        "featureName": "Virtual Glovebox",
+        "category": "Customer Portal",
+        "ourStatus": "parity",
+        "competitorStatus": "parity",
+        "note": "DealerOn overlaps in Customer Portal via Dealer Websites.",
+        "howCompetitorLeads": "DealerOn presents Dealer Websites as a focused capability in Customer Portal, which can feel simpler than a full CEMS suite during short evaluations.",
+        "howToImprove": "Keep demos anchored on appointment-to-payment continuity. Show how Virtual Glovebox connects to MPI, Harmony AI, and payments so DealerOn's point solution looks incomplete."
+      },
+      {
+        "featureName": "PromisePay",
+        "category": "Payments",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "DealerOn does not publicly lead with an equivalent to PromisePay.",
+        "howCompetitorLeads": "DealerOn concentrates on Dealer Websites, so this category is not their primary battlefield.",
+        "howToImprove": "Use PromisePay as a qualifying question in deals where DealerOn is present: if they cannot cover this workflow, expand the evaluation to full fixed-ops CX."
+      }
+    ]
+  },
+  {
+    "competitorId": "comp-20",
+    "competitorName": "Sunbit",
+    "rows": [
+      {
+        "featureName": "E-Pay Service Financing",
+        "category": "Payments",
+        "ourStatus": "parity",
+        "competitorStatus": "leading",
+        "note": "Sunbit is a category leader in pay-over-time for service.",
+        "howCompetitorLeads": "Specialty financing focus and market education make Sunbit easy to shortlist for ticket lift.",
+        "howToImprove": "Do not price-cut PromisePay/E-Pay. Bundle annual billing and show approval lift inside Virtual Glovebox."
+      },
+      {
+        "featureName": "PromisePay",
+        "category": "Payments",
+        "ourStatus": "leading",
+        "competitorStatus": "missing",
+        "note": "UpdatePromise combines merchant processing + financing; Sunbit is financing-first.",
+        "howCompetitorLeads": "Sunbit leads financing mindshare.",
+        "howToImprove": "Sell the combined merchant + financing + CX stack as one revenue system."
+      }
+    ]
+  }
+]
