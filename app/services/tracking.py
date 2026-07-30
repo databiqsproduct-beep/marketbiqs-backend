@@ -144,7 +144,13 @@ async def run_apify_actor(
                     # pydantic/model items → plain dict when possible
                     dumped = getattr(item, "model_dump", None) or getattr(item, "dict", None)
                     items.append(dumped() if callable(dumped) else {"value": str(item)[:500]})
-        await track_usage(db, agency_id, "apify_run", max(1, len(items)), {"actor": actor_id})
+        try:
+            await track_usage(db, agency_id, "apify_run", max(1, len(items)), {"actor": actor_id})
+        except Exception as usage_exc:
+            # Don't fail the scrape if usage accounting cannot flush (e.g. missing agency row)
+            logger = __import__("logging").getLogger("marketbiqs.tracking")
+            logger.warning("Apify usage track failed: %s", usage_exc)
+            await db.rollback()
         return {"status": "ok", "items": items, "run_status": str(run_status) if run_status else "SUCCEEDED"}
     except Exception as exc:
         return {"status": "error", "items": [], "detail": str(exc)[:500]}
