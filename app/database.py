@@ -1,9 +1,10 @@
 from collections.abc import AsyncGenerator
 import logging
 
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import NullPool
 
 from app.config import get_settings
 
@@ -25,7 +26,7 @@ def _normalize_postgres_url(url: str) -> str:
 def _resolve_database_url() -> tuple[str, str]:
     """
     Production: Supabase Postgres when DATABASE_URL or SUPABASE_DB_PASSWORD is set.
-    Local/dev: SQLite (./biqs.db) when Postgres is not configured — matches architecture PDF.
+    Local/dev: SQLite (./biqs.db) when Postgres is not configured.
     """
     url = (settings.database_url or "").strip()
     if url:
@@ -40,11 +41,11 @@ def _resolve_database_url() -> tuple[str, str]:
         ref = settings.supabase_project_ref
         region = settings.supabase_db_region or "us-east-1"
         password = settings.supabase_db_password
+        # Transaction pooler (6543) is preferred on Railway / serverless-style hosts
         host = f"aws-0-{region}.pooler.supabase.com"
         built = f"postgresql+asyncpg://postgres.{ref}:{password}@{host}:6543/postgres"
         return built, "postgres"
 
-    # Architecture PDF: development uses SQLite until Supabase credentials are provided.
     logger.warning(
         "Supabase Postgres not configured (set DATABASE_URL or SUPABASE_DB_PASSWORD). "
         "Using local SQLite biqs.db for development."
@@ -54,14 +55,36 @@ def _resolve_database_url() -> tuple[str, str]:
 
 DATABASE_URL, DATABASE_BACKEND = _resolve_database_url()
 
+if settings.app_env == "production" and DATABASE_BACKEND == "sqlite":
+    raise RuntimeError(
+        "Production cannot use SQLite (causes 'database is locked' and lost data on redeploy). "
+        "In Railway → Backend → Variables set either:\n"
+        "  DATABASE_URL=postgresql+asyncpg://postgres.<ref>:<PASSWORD>@aws-0-<region>.pooler.supabase.com:6543/postgres\n"
+        "or SUPABASE_DB_PASSWORD + SUPABASE_PROJECT_REF (+ optional SUPABASE_DB_REGION)."
+    )
+
 _engine_kwargs: dict = {"echo": False, "future": True}
 if DATABASE_BACKEND == "postgres":
     _engine_kwargs.update(pool_pre_ping=True, pool_size=5, max_overflow=10)
 else:
-    _engine_kwargs["connect_args"] = {"check_same_thread": False}
+    # NullPool + WAL/busy_timeout avoids most "database is locked" under local concurrency
+    _engine_kwargs["poolclass"] = NullPool
+    _engine_kwargs["connect_args"] = {"check_same_thread": False, "timeout": 60}
 
 engine = create_async_engine(DATABASE_URL, **_engine_kwargs)
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+
+if DATABASE_BACKEND == "sqlite":
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _sqlite_on_connect(dbapi_connection, _connection_record) -> None:  # type: ignore[no-untyped-def]
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=60000")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 
 
 class Base(DeclarativeBase):

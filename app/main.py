@@ -81,11 +81,6 @@ async def scheduled_delivery_pipeline() -> None:
 async def lifespan(_: FastAPI):
     if settings.app_env == "production" and settings.secret_key.startswith("biqs-dev"):
         logger.warning("Insecure SECRET_KEY detected in production — rotate before go-live")
-    if settings.app_env == "production" and DATABASE_BACKEND == "sqlite":
-        logger.error(
-            "PRODUCTION IS USING SQLITE — set DATABASE_URL or SUPABASE_DB_PASSWORD on Railway. "
-            "Ephemeral disk wipes users/memberships on every deploy (causes auth 403s)."
-        )
     await init_db()
     if supabase_configured():
         try:
@@ -96,24 +91,38 @@ async def lifespan(_: FastAPI):
             logger.exception("Supabase startup check failed")
     else:
         logger.warning("Supabase API keys not configured — set SUPABASE_URL + SUPABASE_SECRET_KEY")
-    scheduler.add_job(
-        scheduled_ai_pipeline,
-        "interval",
-        hours=settings.scrape_interval_hours,
-        id="agency_ai_pipeline",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        scheduled_delivery_pipeline,
-        "interval",
-        minutes=1,
-        id="agency_delivery_pipeline",
-        replace_existing=True,
-    )
-    scheduler.start()
-    logger.info("MarketBiqs API started (db=%s, scrape_every=%sh)", DATABASE_BACKEND, settings.scrape_interval_hours)
+    # Avoid hammering SQLite with overlapping scheduled pipelines (local/dev only)
+    if DATABASE_BACKEND != "sqlite":
+        scheduler.add_job(
+            scheduled_ai_pipeline,
+            "interval",
+            hours=settings.scrape_interval_hours,
+            id="agency_ai_pipeline",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        scheduler.add_job(
+            scheduled_delivery_pipeline,
+            "interval",
+            minutes=1,
+            id="agency_delivery_pipeline",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        scheduler.start()
+        logger.info(
+            "MarketBiqs API started (db=%s, scrape_every=%sh)",
+            DATABASE_BACKEND,
+            settings.scrape_interval_hours,
+        )
+    else:
+        logger.warning("Schedulers disabled on SQLite — use Postgres in production")
+        logger.info("MarketBiqs API started (db=%s, schedulers=off)", DATABASE_BACKEND)
     yield
-    scheduler.shutdown(wait=False)
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
 
 
 app = FastAPI(title=settings.app_name, version="1.0.0", lifespan=lifespan)
