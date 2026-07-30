@@ -13,8 +13,11 @@ class Settings(BaseSettings):
     # Prefer Supabase Postgres. Example:
     # DATABASE_URL=postgresql+asyncpg://postgres.[ref]:[PASSWORD]@aws-0-[region].pooler.supabase.com:6543/postgres
     database_url: str = ""
-    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
-    frontend_url: str = "http://localhost:3000"
+    cors_origins: str = (
+        "http://localhost:3000,http://127.0.0.1:3000,"
+        "https://marketbiqsfrontend-production.up.railway.app"
+    )
+    frontend_url: str = "https://marketbiqsfrontend-production.up.railway.app"
     api_base_url: str = "http://localhost:8000"
 
     # Primary Supabase access (same vars for localhost + production)

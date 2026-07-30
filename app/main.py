@@ -117,13 +117,6 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, version="1.0.0", lifespan=lifespan)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origin_list,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 
 @app.middleware("http")
@@ -136,6 +129,18 @@ async def request_timing(request: Request, call_next):
         return JSONResponse(status_code=500, content={"detail": "Internal server error", "error": str(exc)[:200]})
     response.headers["X-Process-Time-Ms"] = str(int((time.perf_counter() - started) * 1000))
     return response
+
+
+# CORS outermost so error responses (401/403/500) still get Access-Control-* headers
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origin_list,
+    allow_origin_regex=r"https://.*\.up\.railway\.app",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["Content-Disposition", "X-Process-Time-Ms"],
+)
 
 
 app.include_router(auth.router, prefix="/api")
