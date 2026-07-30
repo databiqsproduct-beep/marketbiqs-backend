@@ -118,15 +118,34 @@ async def run_apify_actor(
     if not token:
         return {"status": "skipped", "items": [], "note": "Missing Apify token"}
     try:
+        from datetime import timedelta
+
         client = ApifyClient(token)
-        run = client.actor(actor_id).call(run_input=run_input, timeout_secs=90)
-        dataset_id = run.get("defaultDatasetId") if isinstance(run, dict) else None
+        # Newer apify-client uses wait_duration (not timeout_secs) and returns a Run object
+        run = client.actor(actor_id).call(
+            run_input=run_input,
+            wait_duration=timedelta(seconds=90),
+        )
+        dataset_id = None
+        if run is None:
+            return {"status": "error", "items": [], "detail": "Apify run returned no result (timeout or failed start)"}
+        if isinstance(run, dict):
+            dataset_id = run.get("defaultDatasetId") or run.get("default_dataset_id")
+            run_status = run.get("status")
+        else:
+            dataset_id = getattr(run, "default_dataset_id", None) or getattr(run, "defaultDatasetId", None)
+            run_status = getattr(run, "status", None)
         items: list[dict[str, Any]] = []
         if dataset_id:
             for item in client.dataset(dataset_id).iterate_items(limit=25):
-                items.append(item)
+                if isinstance(item, dict):
+                    items.append(item)
+                else:
+                    # pydantic/model items → plain dict when possible
+                    dumped = getattr(item, "model_dump", None) or getattr(item, "dict", None)
+                    items.append(dumped() if callable(dumped) else {"value": str(item)[:500]})
         await track_usage(db, agency_id, "apify_run", max(1, len(items)), {"actor": actor_id})
-        return {"status": "ok", "items": items}
+        return {"status": "ok", "items": items, "run_status": str(run_status) if run_status else "SUCCEEDED"}
     except Exception as exc:
         return {"status": "error", "items": [], "detail": str(exc)[:500]}
 
