@@ -1699,7 +1699,9 @@ async def run_full_ai_pipeline(
             competitor_country=competitor_country,
             competitor_count=competitor_count,
         )
-        radar = await run_client_intelligence(db, agency, client)
+        radar = await run_client_intelligence(
+            db, agency, client, competitor_country=competitor_country
+        )
 
         report_id = None
         if generate_report:

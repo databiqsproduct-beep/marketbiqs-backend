@@ -3,7 +3,6 @@ from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.models import (
     Agency,
@@ -17,17 +16,28 @@ from app.models import (
 )
 from app.services import ai as ai_service
 from app.services.embeddings import index_client_intel, retrieve_relevant
-from app.services.ingestion import enrich_competitor_via_hub
-from app.services.tracking import scrape_competitor
+from app.services.tracking import scrape_radar_top_trends
 
 
-async def run_client_intelligence(db: AsyncSession, agency: Agency, client: ClientBrand) -> TrackingJob:
+async def run_client_intelligence(
+    db: AsyncSession,
+    agency: Agency,
+    client: ClientBrand,
+    *,
+    competitor_country: str | None = None,
+) -> TrackingJob:
+    """
+    Radar intelligence — cheap Apify Google Trends pull (top 5, ~$0.01 cap).
+
+    Does NOT run Instagram/TikTok/LinkedIn/Meta scrapers per competitor (those are expensive).
+    """
     job = TrackingJob(
         agency_id=agency.id,
         client_id=client.id,
         job_type="full_intelligence",
         status=JobStatus.running,
         started_at=datetime.utcnow(),
+        detail="Radar: fetching top 5 trends (Apify, cost-capped)",
     )
     db.add(job)
     await db.flush()
@@ -43,60 +53,70 @@ async def run_client_intelligence(db: AsyncSession, agency: Agency, client: Clie
             )
         ).scalars().all()
 
-        snapshot_count = 0
-        for competitor in competitors:
-            try:
-                snaps = await enrich_competitor_via_hub(db, competitor)
-            except Exception:
-                snaps = await scrape_competitor(db, competitor)
-            snapshot_count += len(snaps)
+        radar = await scrape_radar_top_trends(
+            db,
+            agency.id,
+            country_hint=competitor_country,
+            limit=5,
+        )
+        apify_trends = radar.get("trends") or []
 
+        # Light AI pass: map scraped trends to this client's niche + optional sentiments/insights
         analysis = await ai_service.structured_json(
             db,
             agency.id,
             (
-                "Analyze competitor and market signals for a marketing agency client. "
-                "Return JSON with keys: trends (array of {topic, platform, velocity_score, summary, keywords[]}), "
-                "sentiments (array of {subject, source, score, label, themes[], sample_quotes[]}), "
-                "insights (array of {category, title, body, priority})."
+                "You are building a cheap Radar brief. "
+                "Using the scraped Google Trends items, return JSON with keys: "
+                "trends (exactly up to 5 objects: {topic, platform, velocity_score, summary, keywords[]}), "
+                "sentiments (0-3 objects), insights (0-3 objects: {category, title, body, priority}). "
+                "Prefer the scraped trend topics. Tie summaries to THIS client and rivals when possible. "
+                "platform should be google_trends or multi. Keep it concise."
             ),
             json.dumps(
                 {
                     "client": client.name,
                     "industry": client.industry,
-                    "competitors": [
-                        {
-                            "name": c.name,
-                            "website": c.website,
-                            "instagram": c.instagram_handle,
-                            "tiktok": c.tiktok_handle,
-                        }
-                        for c in competitors
-                    ],
+                    "niche": client.niche,
+                    "competitors": [{"name": c.name, "website": c.website} for c in competitors[:8]],
+                    "apify_radar": {
+                        "status": radar.get("status"),
+                        "geo": radar.get("geo"),
+                        "cost_cap_usd": radar.get("cost_cap_usd"),
+                        "trends": apify_trends,
+                    },
                 }
-            ),
+            )[:8000],
+            temperature=0.2,
         )
 
-        for trend in analysis.get("trends", [])[:8]:
+        # Prefer scraped trends; fall back to AI if Apify returned nothing
+        trend_rows = apify_trends[:5]
+        if not trend_rows and isinstance(analysis.get("trends"), list):
+            trend_rows = [t for t in analysis.get("trends") if isinstance(t, dict)][:5]
+
+        for trend in trend_rows[:5]:
             db.add(
                 TrendSignal(
                     agency_id=agency.id,
                     client_id=client.id,
-                    topic=trend.get("topic", "Emerging topic"),
-                    platform=trend.get("platform", "multi"),
+                    topic=str(trend.get("topic") or "Emerging topic")[:255],
+                    platform=str(trend.get("platform") or "google_trends")[:60],
                     velocity_score=float(trend.get("velocity_score") or 0),
-                    summary=trend.get("summary", ""),
-                    keywords=trend.get("keywords") or [],
+                    summary=str(trend.get("summary") or "")[:2000],
+                    keywords=trend.get("keywords") if isinstance(trend.get("keywords"), list) else [],
                 )
             )
 
-        for sentiment in analysis.get("sentiments", [])[:8]:
+        for sentiment in (analysis.get("sentiments") or [])[:3]:
+            if not isinstance(sentiment, dict):
+                continue
             db.add(
                 SentimentRecord(
                     agency_id=agency.id,
                     client_id=client.id,
                     subject=sentiment.get("subject", client.name),
-                    source=sentiment.get("source", "reviews"),
+                    source=sentiment.get("source", "radar"),
                     score=float(sentiment.get("score") or 0),
                     label=sentiment.get("label", "neutral"),
                     themes=sentiment.get("themes") or [],
@@ -104,31 +124,49 @@ async def run_client_intelligence(db: AsyncSession, agency: Agency, client: Clie
                 )
             )
 
-        for insight in analysis.get("insights", [])[:10]:
+        for insight in (analysis.get("insights") or [])[:3]:
+            if not isinstance(insight, dict):
+                continue
             db.add(
                 Insight(
                     agency_id=agency.id,
                     client_id=client.id,
-                    category=insight.get("category", "competitor"),
+                    category=insight.get("category", "trend"),
                     title=insight.get("title", "Insight"),
                     body=insight.get("body", ""),
                     priority=insight.get("priority", "medium"),
-                    source_refs=[],
+                    source_refs=[{"source": "apify_radar", "geo": radar.get("geo")}],
                 )
             )
 
-        indexed = await index_client_intel(db, agency.id, client)
+        indexed = 0
+        try:
+            indexed = await index_client_intel(db, agency.id, client)
+        except Exception:
+            indexed = 0
+
         job.status = JobStatus.completed
         job.finished_at = datetime.utcnow()
         job.result_meta = {
+            "mode": "apify_radar_cheap",
             "competitors": len(competitors),
-            "snapshots": snapshot_count,
-            "trends": len(analysis.get("trends", [])),
-            "sentiments": len(analysis.get("sentiments", [])),
-            "insights": len(analysis.get("insights", [])),
+            "snapshots": 0,
+            "trends": len(trend_rows[:5]),
+            "sentiments": min(3, len(analysis.get("sentiments") or [])),
+            "insights": min(3, len(analysis.get("insights") or [])),
             "embeddings_indexed": indexed,
+            "apify": {
+                "status": radar.get("status"),
+                "geo": radar.get("geo"),
+                "actor": radar.get("actor"),
+                "cost_cap_usd": radar.get("cost_cap_usd"),
+                "detail": radar.get("detail"),
+            },
         }
-        job.detail = "Intelligence run completed"
+        job.detail = (
+            f"Radar completed · top {len(trend_rows[:5])} trends "
+            f"(Apify cost capped at ${radar.get('cost_cap_usd', 0.01)})"
+        )
     except Exception as exc:
         job.status = JobStatus.failed
         job.finished_at = datetime.utcnow()
