@@ -62,39 +62,50 @@ async def scrape_website(db: AsyncSession, agency_id: str, url: str) -> dict[str
     key = await resolve_firecrawl(db, agency_id)
     if not key or not url:
         return {"url": url, "markdown": "", "status": "skipped", "note": "Missing Firecrawl key or URL"}
-    await ensure_scrape_quota(db, agency_id)
-    async with httpx.AsyncClient(timeout=60) as client:
-        response = await client.post(
-            "https://api.firecrawl.dev/v1/scrape",
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json={"url": url, "formats": ["markdown"], "onlyMainContent": True},
-        )
-        if response.status_code >= 400:
-            return {"url": url, "status": "error", "detail": response.text[:500]}
-        data = response.json()
-        await track_usage(db, agency_id, "firecrawl_scrape", 1, {"url": url})
-        markdown = ((data.get("data") or {}).get("markdown")) or ""
-        return {"url": url, "markdown": markdown[:12000], "status": "ok"}
+    try:
+        await ensure_scrape_quota(db, agency_id)
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.post(
+                "https://api.firecrawl.dev/v1/scrape",
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json={"url": url, "formats": ["markdown"], "onlyMainContent": True},
+            )
+            if response.status_code >= 400:
+                return {"url": url, "status": "error", "detail": response.text[:500]}
+            data = response.json()
+            await track_usage(db, agency_id, "firecrawl_scrape", 1, {"url": url})
+            markdown = ((data.get("data") or {}).get("markdown")) or ""
+            return {"url": url, "markdown": markdown[:12000], "status": "ok"}
+    except Exception as exc:
+        return {"url": url, "markdown": "", "status": "error", "detail": str(exc)[:500]}
 
 
 async def serp_visibility(db: AsyncSession, agency_id: str, query: str) -> dict[str, Any]:
     key = await resolve_serp(db, agency_id)
     if not key:
         return {"query": query, "status": "skipped", "organic": []}
-    async with httpx.AsyncClient(timeout=45) as client:
-        response = await client.get(
-            "https://serpapi.com/search.json",
-            params={"engine": "google", "q": query, "api_key": key, "num": 10},
-        )
-        if response.status_code >= 400:
-            return {"query": query, "status": "error", "detail": response.text[:500]}
-        data = response.json()
-        await track_usage(db, agency_id, "serp_search", 1, {"query": query})
-        organic = [
-            {"position": i.get("position"), "title": i.get("title"), "link": i.get("link"), "snippet": i.get("snippet")}
-            for i in data.get("organic_results", [])[:10]
-        ]
-        return {"query": query, "status": "ok", "organic": organic}
+    try:
+        async with httpx.AsyncClient(timeout=45) as client:
+            response = await client.get(
+                "https://serpapi.com/search.json",
+                params={"engine": "google", "q": query, "api_key": key, "num": 10},
+            )
+            if response.status_code >= 400:
+                return {"query": query, "status": "error", "detail": response.text[:500], "organic": []}
+            data = response.json()
+            await track_usage(db, agency_id, "serp_search", 1, {"query": query})
+            organic = [
+                {
+                    "position": i.get("position"),
+                    "title": i.get("title"),
+                    "link": i.get("link"),
+                    "snippet": i.get("snippet"),
+                }
+                for i in data.get("organic_results", [])[:10]
+            ]
+            return {"query": query, "status": "ok", "organic": organic}
+    except Exception as exc:
+        return {"query": query, "status": "error", "detail": str(exc)[:500], "organic": []}
 
 
 async def run_apify_actor(

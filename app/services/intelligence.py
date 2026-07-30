@@ -137,12 +137,27 @@ async def run_client_intelligence(db: AsyncSession, agency: Agency, client: Clie
     return job
 
 
-async def answer_client_question(
+ASSISTANT_SYSTEM_PROMPT = """You are MarketBiqs, a friendly competitive intelligence assistant for marketing agencies.
+
+Tone: warm, clear, and helpful — like a sharp teammate, not a stiff report bot.
+Always answer in clean Markdown that is easy to skim:
+- Open with a short, direct answer in plain language
+- Use **bold** for brand names, metrics, and key takeaways
+- Use bullet lists for findings; numbered lists for steps
+- Use ### short headings when comparing rivals or themes
+- When useful, end with a brief **What to do next** tip (1–3 bullets)
+
+Ground every claim in the provided client workspace data and retrieved_memory.
+If data is thin or missing, say so honestly and suggest running an intelligence refresh.
+Stay specific to this client — no generic marketing fluff."""
+
+
+async def _assistant_context(
     db: AsyncSession,
     agency: Agency,
     client: ClientBrand,
     question: str,
-) -> str:
+) -> dict:
     trends = (
         await db.execute(
             select(TrendSignal)
@@ -172,20 +187,56 @@ async def answer_client_question(
     ).scalars().all()
 
     rag = await retrieve_relevant(db, agency.id, client.id, question, limit=8)
-    context = {
+    return {
         "client": client.name,
+        "industry": client.industry,
         "competitors": [c.name for c in competitors],
         "trends": [{"topic": t.topic, "summary": t.summary} for t in trends],
         "insights": [{"title": i.title, "body": i.body} for i in insights],
         "sentiments": [{"subject": s.subject, "label": s.label, "themes": s.themes} for s in sentiments],
         "retrieved_memory": rag,
     }
+
+
+def _assistant_user_prompt(question: str, context: dict) -> str:
+    return (
+        f"Client question:\n{question}\n\n"
+        f"Workspace intelligence (JSON):\n{json.dumps(context)[:12000]}"
+    )
+
+
+async def answer_client_question(
+    db: AsyncSession,
+    agency: Agency,
+    client: ClientBrand,
+    question: str,
+    history: list[dict[str, str]] | None = None,
+) -> str:
+    context = await _assistant_context(db, agency, client, question)
     return await ai_service.chat_completion(
         db,
         agency.id,
-        (
-            "You are MarketBiqs, an agency competitive intelligence assistant. "
-            "Answer using only the provided client workspace data and retrieved_memory. Be specific and concise."
-        ),
-        f"Question: {question}\nData: {json.dumps(context)[:12000]}",
+        ASSISTANT_SYSTEM_PROMPT,
+        _assistant_user_prompt(question, context),
+        temperature=0.45,
+        history=history,
     )
+
+
+async def stream_client_question(
+    db: AsyncSession,
+    agency: Agency,
+    client: ClientBrand,
+    question: str,
+    history: list[dict[str, str]] | None = None,
+):
+    context = await _assistant_context(db, agency, client, question)
+    async for delta in ai_service.chat_completion_stream(
+        db,
+        agency.id,
+        ASSISTANT_SYSTEM_PROMPT,
+        _assistant_user_prompt(question, context),
+        temperature=0.45,
+        history=history,
+    ):
+        yield delta

@@ -315,39 +315,166 @@ def _extract_features_from_markdown(markdown: str, limit: int = 12) -> list[dict
     return features
 
 
-def _default_software_competitors(client_name: str) -> list[dict]:
-    seeds = [
-        ("Accenture", "https://www.accenture.com/", "Global AI/digital transformation peer"),
-        ("IBM", "https://www.ibm.com/", "Enterprise AI and automation rival"),
-        ("Deloitte", "https://www.deloitte.com/", "Consulting + AI implementation rival"),
-        ("Cognizant", "https://www.cognizant.com/", "Enterprise digital engineering rival"),
-        ("Infosys", "https://www.infosys.com/", "AI and digital services rival"),
-        ("Capgemini", "https://www.capgemini.com/", "AI strategy and implementation rival"),
-        ("TCS", "https://www.tcs.com/", "Enterprise systems + AI rival"),
-        ("Wipro", "https://www.wipro.com/", "Digital engineering rival"),
-        ("Slalom", "https://www.slalom.com/", "Boutique digital transformation rival"),
-        ("Thoughtworks", "https://www.thoughtworks.com/", "Product engineering + AI rival"),
-    ]
-    out = []
-    for name, website, why in seeds:
-        if name.lower() == client_name.lower():
+
+# Hyperscalers, Big 4, mega SIs, and platform giants — not niche peer rivals.
+_GLOBAL_RIVAL_BLOCKLIST = {
+    "accenture", "ibm", "ibm watson", "watson", "microsoft", "microsoft ai", "microsoft azure",
+    "azure", "google", "google cloud", "google cloud ai", "google ai", "dialogflow", "amazon",
+    "aws", "amazon web services", "oracle", "oracle ai", "sap", "sap leonardo", "deloitte",
+    "pwc", "ey", "ernst & young", "kpmg", "cognizant", "infosys", "capgemini", "tcs",
+    "tata consultancy", "wipro", "meta", "openai", "anthropic", "salesforce", "adobe",
+    "nvidia", "mckinsey", "bain", "bcg", "boston consulting", "slalom", "thoughtworks",
+    "manychat", "converse.ai", "inbenta",
+}
+
+_GLOBAL_DOMAIN_BLOCKLIST = {
+    "accenture.com", "ibm.com", "microsoft.com", "azure.microsoft.com", "google.com",
+    "cloud.google.com", "dialogflow.cloud.google.com", "amazon.com", "aws.amazon.com",
+    "oracle.com", "sap.com", "deloitte.com", "pwc.com", "ey.com", "kpmg.com",
+    "cognizant.com", "infosys.com", "capgemini.com", "tcs.com", "wipro.com",
+    "openai.com", "anthropic.com", "salesforce.com", "adobe.com", "nvidia.com",
+    "mckinsey.com", "bain.com", "bcg.com", "slalom.com", "thoughtworks.com",
+    "manychat.com", "converse.ai", "inbenta.com",
+}
+
+
+def _domain_of(url: str) -> str:
+    raw = _as_str(url).strip().lower()
+    if not raw:
+        return ""
+    if "://" not in raw:
+        raw = "https://" + raw
+    try:
+        from urllib.parse import urlparse
+
+        host = (urlparse(raw).hostname or "").lower()
+    except Exception:
+        host = ""
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def _is_global_megarival(name: str, website: str | None = None) -> bool:
+    n = _as_str(name).strip().lower()
+    if not n:
+        return False
+    if n in _GLOBAL_RIVAL_BLOCKLIST:
+        return True
+    for blocked in _GLOBAL_RIVAL_BLOCKLIST:
+        if len(blocked) < 4:
             continue
-        out.append(
+        if blocked == n or n.startswith(blocked + " ") or n.endswith(" " + blocked) or f" {blocked} " in f" {n} ":
+            return True
+        if blocked in n and blocked not in {"ai", "aws", "ibm", "sap", "ey", "tcs", "bcg"}:
+            return True
+    host = _domain_of(website or "")
+    if host:
+        for blocked in _GLOBAL_DOMAIN_BLOCKLIST:
+            if host == blocked or host.endswith("." + blocked):
+                return True
+    return False
+
+
+def _market_area_from_client(client: ClientBrand) -> str:
+    notes = _as_str(client.notes)
+    for line in notes.splitlines():
+        if line.lower().startswith("market:"):
+            return line.split(":", 1)[1].strip()
+    return ""
+
+
+def _set_market_area(client: ClientBrand, market_area: str) -> None:
+    market_area = _as_str(market_area).strip()
+    notes = _as_str(client.notes)
+    lines = [ln for ln in notes.splitlines() if not ln.lower().startswith("market:")]
+    if market_area:
+        lines.insert(0, f"Market: {market_area}")
+    client.notes = "\n".join(lines).strip() or None
+
+
+def _niche_competitor_queries(client: ClientBrand, market_area: str = "") -> list[str]:
+    niche = _as_str(client.niche) or _as_str(client.industry) or "software"
+    market = market_area or _market_area_from_client(client)
+    queries = [
+        f"{client.name} competitors {niche}",
+        f"companies like {client.name} {niche}",
+        f"{niche} agencies competitors {client.name}",
+    ]
+    if market:
+        queries.extend(
+            [
+                f"{niche} companies in {market}",
+                f"{niche} agencies {market} like {client.name}",
+                f"{client.name} competitors {market}",
+            ]
+        )
+    out: list[str] = []
+    seen: set[str] = set()
+    for q in queries:
+        key = q.lower().strip()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(q.strip())
+    return out[:5]
+
+
+def _filter_niche_competitors(
+    items: list[dict],
+    client_name: str,
+    *,
+    market_area: str = "",
+    niche: str = "",
+) -> list[dict]:
+    deduped: list[dict] = []
+    seen_names: set[str] = set()
+    client_l = client_name.lower()
+    niche_l = niche.lower()
+    market_l = market_area.lower()
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = _as_str(item.get("name")).strip()
+        website = _as_str(item.get("website")) or None
+        if not name or name.lower() == client_l or name.lower() in seen_names:
+            continue
+        if _is_global_megarival(name, website):
+            continue
+        if item.get("same_niche") is False or item.get("is_global_platform") is True:
+            continue
+        why = _as_str(item.get("why_relevant") or item.get("description"))
+        try:
+            score = float(item.get("overlap_score") or item.get("niche_fit_score") or 60)
+        except (TypeError, ValueError):
+            score = 60.0
+        blob = f"{name} {why} {website or ''}".lower()
+        if niche_l and any(tok in blob for tok in niche_l.replace("/", " ").split() if len(tok) > 3):
+            score += 8
+        if market_l and any(tok in blob for tok in market_l.replace(",", " ").split() if len(tok) > 2):
+            score += 10
+        seen_names.add(name.lower())
+        deduped.append(
             {
+                **item,
                 "name": name,
                 "website": website,
-                "why_relevant": why,
-                "threat_level": "high",
-                "overlap_score": 70,
+                "why_relevant": why or item.get("why_relevant"),
+                "overlap_score": min(score, 95),
+                "threat_level": _as_str(item.get("threat_level"), "high").lower(),
             }
         )
-    return out[:10]
+        if len(deduped) >= 10:
+            break
+    return deduped
 
 
 def _competitors_from_serp(organic: list[dict], client_name: str) -> list[dict]:
     rivals: list[dict] = []
     seen: set[str] = set()
     client_l = client_name.lower()
+    skip_title_bits = ("vs ", " versus ", "alternative", "alternatives", "best ", "top ", "compared")
     for item in organic or []:
         title = _as_str(item.get("title"))
         link = _as_str(item.get("link"))
@@ -357,15 +484,19 @@ def _competitors_from_serp(organic: list[dict], client_name: str) -> list[dict]:
         name = title.split("|")[0].split("-")[0].split("–")[0].strip()
         if not name or client_l in name.lower() or len(name) > 60:
             continue
-        key = name.lower()
-        if key in seen:
+        lowered = name.lower()
+        if any(bit in lowered for bit in skip_title_bits):
             continue
-        seen.add(key)
+        if _is_global_megarival(name, link):
+            continue
+        if lowered in seen:
+            continue
+        seen.add(lowered)
         rivals.append(
             {
                 "name": name,
                 "website": link.split("?")[0],
-                "why_relevant": snippet[:220] or f"Appears in search for {client_name} competitors",
+                "why_relevant": snippet[:220] or f"Appears in niche search for {client_name} competitors",
                 "threat_level": "high",
                 "overlap_score": 68,
             }
@@ -373,6 +504,7 @@ def _competitors_from_serp(organic: list[dict], client_name: str) -> list[dict]:
         if len(rivals) >= 10:
             break
     return rivals
+
 
 
 async def enrich_client_profile(db: AsyncSession, agency: Agency, client: ClientBrand) -> dict:
@@ -386,8 +518,13 @@ async def enrich_client_profile(db: AsyncSession, agency: Agency, client: Client
         agency.id,
         (
             "Profile this company for competitive intelligence. "
-            "Return JSON keys ONLY: industry, niche, tagline, description, "
+            "Return JSON keys ONLY: industry, niche, market_area, business_model, tagline, description, "
             "goals (3-5 strings), features (8-12 objects with name, category, description). "
+            "niche = specific category (not just 'AI' or 'Software'). "
+            "market_area = concrete city/region/country they sell into "
+            "(e.g. 'Pakistan', 'Karachi', 'UAE', 'MENA', 'US mid-market'). "
+            "Never return only 'Global' or 'Worldwide' — use HQ or primary selling region from contact/address/phone clues. "
+            "business_model = agency|product|saas|services|marketplace|other. "
             "Use the website excerpt. Be concrete. No filler."
         ),
         json.dumps(
@@ -402,11 +539,13 @@ async def enrich_client_profile(db: AsyncSession, agency: Agency, client: Client
     )
 
     if not isinstance(profile.get("features"), list) or not profile.get("features"):
-        # Compact retry — large prompts sometimes trip Groq and return text fallback
         profile = await ai_service.structured_json(
             db,
             agency.id,
-            "Return JSON: {industry, niche, tagline, description, goals:[], features:[{name, category, description}]}.",
+            (
+                "Return JSON: {industry, niche, market_area, business_model, tagline, description, "
+                "goals:[], features:[{name, category, description}]}."
+            ),
             json.dumps(
                 {
                     "name": client.name,
@@ -420,8 +559,15 @@ async def enrich_client_profile(db: AsyncSession, agency: Agency, client: Client
     client.industry = _as_str(profile.get("industry")) or client.industry or "Software"
     client.niche = _as_str(profile.get("niche")) or client.niche
     client.tagline = _as_str(profile.get("tagline")) or client.tagline
-    if profile.get("description"):
-        client.notes = _as_str(profile.get("description"))
+    market_area = _as_str(profile.get("market_area")) or _market_area_from_client(client)
+    if market_area.strip().lower() in {"global", "worldwide", "international", "world"}:
+        market_area = ""
+    business_model = _as_str(profile.get("business_model")) or "services"
+    description = _as_str(profile.get("description"))
+    if description:
+        client.notes = description
+    _set_market_area(client, market_area)
+
     goals = profile.get("goals") if isinstance(profile.get("goals"), list) else []
     client.goals = [_as_str(g) for g in goals if _as_str(g)] or client.goals or [
         "Win more competitive deals",
@@ -473,53 +619,102 @@ async def enrich_client_profile(db: AsyncSession, agency: Agency, client: Client
             features_by_name[key] = feature
             feature_rows.append(feature)
 
-    competitor_items: list[dict] = []
+    competitor_prompt = (
+        "Find 8-10 REAL direct competitors for this company. "
+        "They must be from the SAME niche, SAME business model, and preferably the SAME market/area "
+        "(city, country, or region the client sells into). "
+        "Return JSON: {competitors:[{name, website, why_relevant, threat_level, overlap_score, "
+        "same_niche:true, market_overlap, is_global_platform:false}]}. "
+        "Hard rules:\n"
+        "1) Prefer local/regional peer agencies, boutiques, or product companies that chase the same buyers.\n"
+        "2) EXCLUDE global hyperscalers and mega consultancies "
+        "(Accenture, IBM, Microsoft, Google, Amazon/AWS, Oracle, SAP, Deloitte, PwC, EY, KPMG, Cognizant, Infosys, TCS, Wipro, OpenAI).\n"
+        "3) EXCLUDE platforms that are tools/infrastructure rather than peer businesses "
+        "(Dialogflow, Azure AI, Watson as platforms, ManyChat).\n"
+        "4) If market_area is set, bias strongly toward rivals operating in that area or selling to that market.\n"
+        "5) why_relevant must say how they overlap on niche + buyers + geography.\n"
+        "6) Only include companies you believe actually exist."
+    )
     competitor_pack = await ai_service.structured_json(
         db,
         agency.id,
-        (
-            "List 8-10 real high-risk competitors for this company. "
-            "Return JSON: {competitors:[{name, website, why_relevant, threat_level, overlap_score}]}. "
-            "Prefer equal/stronger rivals. Include valid websites when possible."
-        ),
+        competitor_prompt,
         json.dumps(
             {
                 "name": client.name,
                 "website": client.website,
                 "industry": client.industry,
                 "niche": client.niche,
+                "market_area": market_area,
+                "business_model": business_model,
                 "features": [f.name for f in feature_rows[:10]],
                 "site_excerpt": site_md[:2000],
             }
         ),
         temperature=0.2,
     )
+    competitor_items: list[dict] = []
     if isinstance(competitor_pack.get("competitors"), list):
         competitor_items = [c for c in competitor_pack["competitors"] if isinstance(c, dict)]
 
-    if len(competitor_items) < 4:
-        serp = await serp_visibility(db, agency.id, f"{client.name} competitors alternatives")
-        competitor_items.extend(_competitors_from_serp(serp.get("organic") or [], client.name))
+    competitor_items = _filter_niche_competitors(
+        competitor_items, client.name, market_area=market_area, niche=_as_str(client.niche)
+    )
 
     if len(competitor_items) < 4:
-        competitor_items.extend(_default_software_competitors(client.name))
+        for query in _niche_competitor_queries(client, market_area):
+            serp = await serp_visibility(db, agency.id, query)
+            competitor_items.extend(_competitors_from_serp(serp.get("organic") or [], client.name))
+            competitor_items = _filter_niche_competitors(
+                competitor_items, client.name, market_area=market_area, niche=_as_str(client.niche)
+            )
+            if len(competitor_items) >= 4:
+                break
 
-    # Deduplicate competitor list
-    deduped: list[dict] = []
-    seen_names: set[str] = set()
-    for item in competitor_items:
-        name = _as_str(item.get("name")).strip()
-        if not name or name.lower() == client.name.lower() or name.lower() in seen_names:
-            continue
-        seen_names.add(name.lower())
-        deduped.append(item)
-        if len(deduped) >= 10:
-            break
+    if len(competitor_items) < 4:
+        retry_pack = await ai_service.structured_json(
+            db,
+            agency.id,
+            (
+                "Propose niche peer competitors only (same category + similar company size/model). "
+                "Return JSON {competitors:[{name, website, why_relevant, threat_level, overlap_score, same_niche:true}]}. "
+                "No Fortune-500 tech giants. Prefer regional/local firms in the client's market_area."
+            ),
+            json.dumps(
+                {
+                    "name": client.name,
+                    "niche": client.niche,
+                    "industry": client.industry,
+                    "market_area": market_area,
+                    "business_model": business_model,
+                    "already_have": [c.get("name") for c in competitor_items],
+                }
+            ),
+            temperature=0.25,
+        )
+        if isinstance(retry_pack.get("competitors"), list):
+            competitor_items.extend([c for c in retry_pack["competitors"] if isinstance(c, dict)])
+        competitor_items = _filter_niche_competitors(
+            competitor_items, client.name, market_area=market_area, niche=_as_str(client.niche)
+        )
+
+    deduped = competitor_items[:10]
 
     existing = (
         await db.execute(select(Competitor).where(Competitor.client_id == client.id, Competitor.agency_id == agency.id))
     ).scalars().all()
     by_name = {_as_str(c.name).lower(): c for c in existing}
+
+    pruned_global = 0
+    for competitor in existing:
+        if competitor.is_pinned:
+            continue
+        if _is_global_megarival(competitor.name, competitor.website):
+            competitor.is_tracking = False
+            competitor.threat_level = "low"
+            competitor.overlap_score = min(float(competitor.overlap_score or 0), 30)
+            pruned_global += 1
+
     created_competitors = 0
     for item in deduped:
         name = _as_str(item.get("name")).strip()
@@ -529,11 +724,12 @@ async def enrich_client_profile(db: AsyncSession, agency: Agency, client: Client
         except (TypeError, ValueError):
             overlap = 70.0
         key = name.lower()
+        why = _as_str(item.get("why_relevant"))
         if key in by_name:
             competitor = by_name[key]
             competitor.website = _as_str(item.get("website")) or competitor.website
-            competitor.description = _as_str(item.get("why_relevant")) or competitor.description
-            competitor.why_dangerous = _as_str(item.get("why_relevant")) or competitor.why_dangerous
+            competitor.description = why or competitor.description
+            competitor.why_dangerous = why or competitor.why_dangerous
             competitor.threat_level = threat if threat in {"medium", "high"} else "high"
             competitor.overlap_score = max(overlap, competitor.overlap_score or 0)
             competitor.is_tracking = True
@@ -543,8 +739,8 @@ async def enrich_client_profile(db: AsyncSession, agency: Agency, client: Client
                 client_id=client.id,
                 name=name,
                 website=_as_str(item.get("website")) or None,
-                description=_as_str(item.get("why_relevant")) or None,
-                why_dangerous=_as_str(item.get("why_relevant")) or None,
+                description=why or None,
+                why_dangerous=why or None,
                 threat_level=threat if threat in {"medium", "high"} else "high",
                 overlap_score=overlap,
                 is_tracking=True,
@@ -556,10 +752,14 @@ async def enrich_client_profile(db: AsyncSession, agency: Agency, client: Client
     return {
         "features": len(feature_rows),
         "competitors_added": created_competitors,
+        "competitors_pruned_global": pruned_global,
         "goals": len(client.goals or []),
         "industry": client.industry,
         "niche": client.niche,
+        "market_area": market_area,
+        "business_model": business_model,
     }
+
 
 
 async def run_competitive_pack(db: AsyncSession, agency: Agency, client: ClientBrand) -> dict:
@@ -581,7 +781,9 @@ async def run_competitive_pack(db: AsyncSession, agency: Agency, client: ClientB
         )
     ).scalars().all()
 
-    if not features or not competitors:
+    globalish = sum(1 for c in competitors if _is_global_megarival(c.name, c.website))
+    needs_refresh = (not features or not competitors) or (competitors and globalish >= max(2, len(competitors) // 2))
+    if needs_refresh:
         await enrich_client_profile(db, agency, client)
         features = (
             await db.execute(
@@ -617,18 +819,21 @@ async def run_competitive_pack(db: AsyncSession, agency: Agency, client: ClientB
             db,
             agency.id,
             (
-                "Enrich a competitor for competitive intelligence. "
+                "Enrich a competitor for competitive intelligence against THIS client only. "
                 "Return JSON keys: tagline, description, headquarters, overlap_score (0-100), "
-                "threat_level (low|medium|high), is_leading_rival (boolean), why_dangerous (1-2 sentences), "
+                "threat_level (low|medium|high), is_leading_rival (boolean), same_niche (boolean), "
+                "same_market (boolean), is_global_platform (boolean), why_dangerous (1-2 sentences), "
                 "evidence_snippet (short quote/paraphrase from site), "
                 "features (array of {name, category, description}). "
-                "Be practical: enterprise AI/services firms that sell into the same buyers should usually be medium/high."
+                "Score overlap high only when niche + buyer + geography truly match. "
+                "Global hyperscalers/platforms that are not peer businesses should be low threat, same_niche=false, is_global_platform=true."
             ),
             json.dumps(
                 {
                     "client": client.name,
                     "client_industry": client.industry,
                     "client_niche": client.niche,
+                    "client_market_area": _market_area_from_client(client),
                     "client_features": [
                         {"name": f.name, "category": f.category, "description": f.description} for f in features
                     ],
@@ -669,14 +874,22 @@ async def run_competitive_pack(db: AsyncSession, agency: Agency, client: ClientB
         competitor.last_scraped_at = datetime.utcnow()
         analyzed.append(competitor)
 
-        clearly_weak = (
+        off_niche = (
             not competitor.is_pinned
-            and competitor.threat_level == "low"
-            and (competitor.overlap_score or 0) < 45
-            and analysis.get("is_leading_rival") is False
+            and (
+                _is_global_megarival(competitor.name, competitor.website)
+                or analysis.get("is_global_platform") is True
+                or analysis.get("same_niche") is False
+                or (
+                    competitor.threat_level == "low"
+                    and (competitor.overlap_score or 0) < 45
+                    and analysis.get("is_leading_rival") is False
+                )
+            )
         )
-        if clearly_weak:
+        if off_niche:
             competitor.is_tracking = False
+            competitor.threat_level = "low"
             continue
 
         competitor.is_tracking = True

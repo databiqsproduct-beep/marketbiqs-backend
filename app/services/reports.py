@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 
@@ -9,13 +10,106 @@ from reportlab.lib.units import inch
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
-from app.models import Agency, ClientBrand, Competitor, Insight, Report, SentimentRecord, TrendSignal
+from app.models import (
+    Agency,
+    ClientBrand,
+    Competitor,
+    FeatureComparison,
+    GapReport,
+    GoalAlert,
+    Insight,
+    ProductFeature,
+    Report,
+    SentimentRecord,
+    TrendSignal,
+)
 from app.services import ai as ai_service
+
+logger = logging.getLogger("marketbiqs.reports")
 
 REPORTS_DIR = Path(__file__).resolve().parents[2] / "storage" / "reports"
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _fallback_report(
+    client: ClientBrand,
+    competitors: list[Competitor],
+    features: list[ProductFeature],
+    gaps: list[GapReport],
+    alerts: list[GoalAlert],
+    trends: list[TrendSignal],
+    period_label: str,
+) -> dict:
+    owned = [f for f in features if not f.is_wishlisted]
+    wishlist = [f for f in features if f.is_wishlisted]
+    rival_names = [c.name for c in competitors[:8]]
+    lagging_items: list[str] = []
+    for gap in gaps[:5]:
+        for item in (gap.lagging or [])[:3]:
+            if isinstance(item, str):
+                lagging_items.append(f"{gap.competitor_name}: {item}")
+            elif isinstance(item, dict):
+                lagging_items.append(f"{gap.competitor_name}: {item.get('feature') or item.get('name') or item}")
+
+    summary = (
+        f"{period_label} for {client.name}: tracking {len(competitors)} rivals with "
+        f"{len(owned)} owned features and {len(wishlist)} wishlist items. "
+        f"{'Open alerts need attention now.' if alerts else 'No open specialty alerts this cycle.'}"
+    )
+
+    sections = [
+        {
+            "heading": "Competitive landscape",
+            "bullets": [
+                f"Priority rivals: {', '.join(rival_names) or 'none tagged yet'}.",
+                f"Industry focus: {client.industry or 'not set'} · Website: {client.website or 'not set'}.",
+                "Re-run intel after major product or pricing changes to keep this board fresh.",
+            ],
+        },
+        {
+            "heading": "Product posture",
+            "bullets": [
+                f"{len(owned)} shipped capabilities inventoried for {client.name}.",
+                f"{len(wishlist)} wishlist items ready for roadmap / Jira push.",
+                *(
+                    [f"Top owned: {', '.join(f.name for f in owned[:5])}."]
+                    if owned
+                    else ["Add or refresh features so gap analysis has a baseline."]
+                ),
+            ],
+        },
+        {
+            "heading": "Gaps & moves",
+            "bullets": (
+                lagging_items[:6]
+                or [
+                    "No structured gap rows yet — run intel again once rival pages are reachable.",
+                ]
+            )
+            + [
+                *(
+                    [f"Alert: {a.title} — {a.action}" for a in alerts[:4]]
+                    if alerts
+                    else ["No open specialty alerts this run."]
+                )
+            ],
+        },
+        {
+            "heading": "What to do next",
+            "bullets": [
+                "Pin the 3 rivals that matter most to your current pitch.",
+                "Wishlist the highest-impact missing feature and draft tickets.",
+                "Ask the AI assistant for a pre-call brief on the lead rival.",
+                *(
+                    [f"Watch trend: {t.topic}" for t in trends[:3]]
+                    if trends
+                    else ["Schedule the next intel refresh within 7 days."]
+                ),
+            ],
+        },
+    ]
+    return {"summary": summary, "sections": sections}
 
 
 async def generate_client_report(
@@ -25,39 +119,146 @@ async def generate_client_report(
     period_label: str = "Weekly",
     created_by: str | None = None,
 ) -> Report:
-    competitors = (
-        await db.execute(select(Competitor).where(Competitor.client_id == client.id, Competitor.agency_id == agency.id))
-    ).scalars().all()
-    trends = (
-        await db.execute(
-            select(TrendSignal)
-            .where(TrendSignal.client_id == client.id, TrendSignal.agency_id == agency.id)
-            .order_by(TrendSignal.detected_at.desc())
-            .limit(12)
+    competitors = list(
+        (
+            await db.execute(
+                select(Competitor).where(Competitor.client_id == client.id, Competitor.agency_id == agency.id)
+            )
         )
-    ).scalars().all()
-    sentiments = (
-        await db.execute(
-            select(SentimentRecord)
-            .where(SentimentRecord.client_id == client.id, SentimentRecord.agency_id == agency.id)
-            .order_by(SentimentRecord.created_at.desc())
-            .limit(12)
+        .scalars()
+        .all()
+    )
+    trends = list(
+        (
+            await db.execute(
+                select(TrendSignal)
+                .where(TrendSignal.client_id == client.id, TrendSignal.agency_id == agency.id)
+                .order_by(TrendSignal.detected_at.desc())
+                .limit(12)
+            )
         )
-    ).scalars().all()
-    insights = (
-        await db.execute(
-            select(Insight)
-            .where(Insight.client_id == client.id, Insight.agency_id == agency.id)
-            .order_by(Insight.created_at.desc())
-            .limit(12)
+        .scalars()
+        .all()
+    )
+    sentiments = list(
+        (
+            await db.execute(
+                select(SentimentRecord)
+                .where(SentimentRecord.client_id == client.id, SentimentRecord.agency_id == agency.id)
+                .order_by(SentimentRecord.created_at.desc())
+                .limit(12)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
+    insights = list(
+        (
+            await db.execute(
+                select(Insight)
+                .where(Insight.client_id == client.id, Insight.agency_id == agency.id)
+                .order_by(Insight.created_at.desc())
+                .limit(12)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    features = list(
+        (
+            await db.execute(
+                select(ProductFeature).where(
+                    ProductFeature.client_id == client.id, ProductFeature.agency_id == agency.id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    gaps = list(
+        (
+            await db.execute(
+                select(GapReport)
+                .where(GapReport.client_id == client.id, GapReport.agency_id == agency.id)
+                .order_by(GapReport.created_at.desc())
+                .limit(8)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    comparisons = list(
+        (
+            await db.execute(
+                select(FeatureComparison)
+                .where(FeatureComparison.client_id == client.id, FeatureComparison.agency_id == agency.id)
+                .order_by(FeatureComparison.created_at.desc())
+                .limit(20)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    alerts = list(
+        (
+            await db.execute(
+                select(GoalAlert)
+                .where(GoalAlert.client_id == client.id, GoalAlert.agency_id == agency.id)
+                .order_by(GoalAlert.created_at.desc())
+                .limit(10)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    owned = [f for f in features if not f.is_wishlisted]
+    wishlist = [f for f in features if f.is_wishlisted]
 
     context = {
-        "client": client.name,
-        "competitors": [c.name for c in competitors],
+        "client": {
+            "name": client.name,
+            "industry": client.industry,
+            "website": client.website,
+            "niche": getattr(client, "niche", None),
+        },
+        "competitors": [
+            {
+                "name": c.name,
+                "website": c.website,
+                "description": (c.description or "")[:280],
+                "pinned": bool(getattr(c, "is_pinned", False)),
+            }
+            for c in competitors[:12]
+        ],
+        "owned_features": [{"name": f.name, "category": f.category} for f in owned[:20]],
+        "wishlist_features": [{"name": f.name, "category": f.category} for f in wishlist[:12]],
+        "gaps": [
+            {
+                "competitor": g.competitor_name,
+                "summary": (g.summary or "")[:300],
+                "lagging": (g.lagging or [])[:5],
+                "opportunities": (g.opportunities or [])[:5],
+            }
+            for g in gaps[:6]
+        ],
+        "comparisons": [
+            {
+                "competitor": row.competitor_name,
+                "feature": row.feature_name,
+                "our_status": row.our_status,
+                "competitor_status": row.competitor_status,
+                "improve": (row.how_to_improve or "")[:180],
+            }
+            for row in comparisons[:15]
+        ],
+        "alerts": [
+            {"title": a.title, "impact": a.impact, "action": (a.action or "")[:200]} for a in alerts[:8]
+        ],
         "trends": [{"topic": t.topic, "platform": t.platform, "summary": t.summary} for t in trends],
-        "sentiments": [{"subject": s.subject, "label": s.label, "score": s.score, "themes": s.themes} for s in sentiments],
+        "sentiments": [
+            {"subject": s.subject, "label": s.label, "score": s.score, "themes": s.themes} for s in sentiments
+        ],
         "insights": [{"title": i.title, "body": i.body, "priority": i.priority} for i in insights],
     }
 
@@ -65,22 +266,48 @@ async def generate_client_report(
         db,
         agency.id,
         (
-            "You are an agency competitive intelligence analyst. Produce a client-ready white-label report "
-            "JSON with keys: summary (string), sections (array of {heading, bullets[]} ). Keep bullets actionable."
+            "You are an agency competitive intelligence analyst writing a client-ready white-label brief. "
+            "Return JSON with keys: summary (2-4 friendly sentences), sections (array of "
+            "{heading, bullets[]} with 3-6 actionable bullets each). "
+            "Use only the provided workspace data. Prefer concrete rival/feature names. "
+            "Tone: clear, confident, useful for an account team."
         ),
-        json.dumps(context)[:12000],
+        json.dumps(context)[:14000],
+        temperature=0.35,
     )
 
-    summary = structured.get("summary") or f"{period_label} competitive intelligence summary for {client.name}."
-    sections = structured.get("sections") or [
-        {
-            "heading": "Executive Overview",
-            "bullets": [
-                f"Tracked {len(competitors)} competitors for {client.name}.",
-                f"Identified {len(trends)} trend signals and {len(sentiments)} sentiment themes.",
-            ],
-        }
-    ]
+    summary = structured.get("summary") if isinstance(structured, dict) else None
+    sections = structured.get("sections") if isinstance(structured, dict) else None
+
+    if (
+        not summary
+        or not isinstance(sections, list)
+        or not sections
+        or ai_service.is_fallback_text(str(summary))
+    ):
+        logger.warning(
+            "Using deterministic report fallback for client=%s (AI summary missing/invalid)",
+            client.id,
+        )
+        fallback = _fallback_report(client, competitors, features, gaps, alerts, trends, period_label)
+        summary = fallback["summary"]
+        sections = fallback["sections"]
+    else:
+        # Normalize section shape
+        clean_sections = []
+        for section in sections:
+            if not isinstance(section, dict):
+                continue
+            heading = str(section.get("heading") or "Insight").strip()
+            bullets = section.get("bullets") or []
+            if not isinstance(bullets, list):
+                bullets = [str(bullets)]
+            bullets = [str(b).strip() for b in bullets if str(b).strip()]
+            if heading and bullets:
+                clean_sections.append({"heading": heading, "bullets": bullets})
+        sections = clean_sections or _fallback_report(
+            client, competitors, features, gaps, alerts, trends, period_label
+        )["sections"]
 
     report = Report(
         agency_id=agency.id,
@@ -88,7 +315,7 @@ async def generate_client_report(
         title=f"{client.name} — {period_label} Intelligence Report",
         period_label=period_label,
         status="ready",
-        summary=summary,
+        summary=str(summary).strip(),
         sections=sections,
         white_labeled=True,
         created_by=created_by,
@@ -105,7 +332,6 @@ async def generate_client_report(
         if remote:
             report.pdf_path = remote
     except Exception:
-        # Local PDF path remains the fallback
         pass
     agency.reports_used += 1
     await db.flush()
