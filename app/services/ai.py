@@ -73,19 +73,20 @@ async def chat_completion(
     json_mode: bool = False,
 ) -> str:
     api_key = await resolve_groq_key(db, agency_id)
-    client = _client(api_key)
+    client = _async_client(api_key)
     if not client:
         logger.warning("Groq key missing for agency=%s — using fallback text", agency_id)
         return _fallback_text(system, user)
+    messages = _normalize_messages(system, user, history)
     try:
         kwargs: dict[str, Any] = {
             "model": CHAT_MODEL,
-            "messages": _normalize_messages(system, user, history),
+            "messages": messages,
             "temperature": temperature,
         }
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
-        response = client.chat.completions.create(**kwargs)
+        response = await client.chat.completions.create(**kwargs)
         content = (response.choices[0].message.content or "").strip()
         if not content:
             logger.warning("Groq returned empty content for agency=%s", agency_id)
@@ -96,9 +97,9 @@ async def chat_completion(
         if json_mode:
             logger.warning("Groq json_mode failed for agency=%s (%s); retrying plain", agency_id, exc)
             try:
-                response = client.chat.completions.create(
+                response = await client.chat.completions.create(
                     model=CHAT_MODEL,
-                    messages=_normalize_messages(system, user, history),
+                    messages=messages,
                     temperature=temperature,
                 )
                 content = (response.choices[0].message.content or "").strip()

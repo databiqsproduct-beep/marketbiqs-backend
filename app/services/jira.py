@@ -98,7 +98,7 @@ async def create_jira_ticket(
     if parent_epic_key and issue_type.lower() != "epic":
         fields["parent"] = {"key": parent_epic_key}
 
-    async with httpx.AsyncClient(timeout=45) as client:
+    async with httpx.AsyncClient(timeout=20) as client:
         response = await client.post(
             f"{base}/rest/api/3/issue",
             auth=(email, token),

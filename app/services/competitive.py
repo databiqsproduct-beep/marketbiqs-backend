@@ -1,4 +1,6 @@
+import asyncio
 import json
+import logging
 from datetime import datetime
 
 from sqlalchemy import delete, select
@@ -12,6 +14,7 @@ from app.models import (
     FeatureTicket,
     GapReport,
     GoalAlert,
+    Integration,
     JobStatus,
     ProductFeature,
     TrackingJob,
@@ -20,6 +23,8 @@ from app.services import ai as ai_service
 from app.services import jira as jira_service
 from app.services.reports import generate_client_report
 from app.services.tracking import scrape_website, serp_visibility
+
+logger = logging.getLogger("marketbiqs.competitive")
 
 
 _WEAK_COMPARISON_MARKERS = (
@@ -1252,54 +1257,69 @@ async def love_feature_and_build_tickets(
             }
         )
 
-    payload = await ai_service.structured_json(
-        db,
-        agency.id,
-        (
-            "The marketing agency / client manually selected this feature. Create BOARD-READY Jira work. "
-            "Return JSON {tickets:[{heading, body, acceptance_criteria[], priority, ticket_type, labels[], "
-            "estimated_effort, story_points, why_useful, competitor_context, evidence_links:[{url, snippet, source}]}]}. "
-            "Requirements:\n"
-            "- Exactly 1 epic first, then 8-12 stories/tasks under that theme.\n"
-            "- ticket_type must be epic|story|task.\n"
-            "- Each story must have 3-6 measurable acceptance criteria.\n"
-            "- Include effort estimate and story_points (1-8).\n"
-            "- Link competitor evidence in competitor_context and evidence_links.\n"
-            "- Cover: product packaging, GTM messaging, sales enablement, demo narrative, proof/content, analytics, rollout.\n"
-            "- No filler. Valid, shippable tickets only."
-        ),
-        json.dumps(
-            {
-                "feature": {
-                    "name": feature.name,
-                    "category": feature.category,
-                    "description": feature.description,
-                },
-                "client": {"name": client.name, "goals": client.goals or []},
-                "feature_comparisons": [
+    # Keep AI under platform proxy limits (~60s). Fall back to templates on timeout/failure.
+    payload: dict = {}
+    try:
+        payload = await asyncio.wait_for(
+            ai_service.structured_json(
+                db,
+                agency.id,
+                (
+                    "The marketing agency / client manually selected this feature. Create BOARD-READY Jira work. "
+                    "Return JSON {tickets:[{heading, body, acceptance_criteria[], priority, ticket_type, labels[], "
+                    "estimated_effort, story_points, why_useful, competitor_context, evidence_links:[{url, snippet, source}]}]}. "
+                    "Requirements:\n"
+                    "- Exactly 1 epic first, then 4-6 stories/tasks under that theme.\n"
+                    "- ticket_type must be epic|story|task.\n"
+                    "- Each story must have 3-5 measurable acceptance criteria.\n"
+                    "- Include effort estimate and story_points (1-8).\n"
+                    "- Link competitor evidence in competitor_context and evidence_links.\n"
+                    "- Cover: packaging, GTM, sales enablement, demo, analytics.\n"
+                    "- No filler. Valid, shippable tickets only. Keep responses concise."
+                ),
+                json.dumps(
                     {
-                        "competitor": c.competitor_name,
-                        "our_status": c.our_status,
-                        "competitor_status": c.competitor_status,
-                        "how_to_improve": c.how_to_improve,
-                        "how_competitor_leads": c.how_competitor_leads,
-                        "citations": c.citations,
-                        "confidence_score": c.confidence_score,
+                        "feature": {
+                            "name": feature.name,
+                            "category": feature.category,
+                            "description": feature.description,
+                        },
+                        "client": {"name": client.name, "goals": (client.goals or [])[:5]},
+                        "feature_comparisons": [
+                            {
+                                "competitor": c.competitor_name,
+                                "our_status": c.our_status,
+                                "competitor_status": c.competitor_status,
+                                "how_to_improve": (c.how_to_improve or "")[:280],
+                                "how_competitor_leads": (c.how_competitor_leads or "")[:280],
+                                "confidence_score": c.confidence_score,
+                            }
+                            for c in comparisons[:6]
+                        ],
+                        "related_gaps": [
+                            {
+                                "competitor": g.competitor_name,
+                                "opportunities": (g.opportunities or [])[:3],
+                                "summary": (g.summary or "")[:220],
+                            }
+                            for g in gaps[:4]
+                        ],
+                        "related_alerts": [
+                            {"title": a.title, "action": (a.action or "")[:160]} for a in alerts[:4]
+                        ],
+                        "seed_evidence": evidence[:6],
                     }
-                    for c in comparisons
-                ],
-                "related_gaps": [
-                    {"competitor": g.competitor_name, "opportunities": g.opportunities, "summary": g.summary}
-                    for g in gaps[:8]
-                ],
-                "related_alerts": [
-                    {"title": a.title, "action": a.action, "goal": a.goal} for a in alerts[:8]
-                ],
-                "seed_evidence": evidence[:12],
-            }
-        )[:13000],
-        temperature=0.35,
-    )
+                )[:7000],
+                temperature=0.3,
+            ),
+            timeout=35,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("development-plan AI timed out for feature=%s — using templates", feature.id)
+        payload = {}
+    except Exception:
+        logger.exception("development-plan AI failed for feature=%s — using templates", feature.id)
+        payload = {}
 
     await db.execute(delete(FeatureTicket).where(FeatureTicket.feature_id == feature.id))
     tickets: list[FeatureTicket] = []
@@ -1327,7 +1347,7 @@ async def love_feature_and_build_tickets(
         ] + items
 
     story_count = sum(1 for i in items if _as_str(i.get("ticket_type")).lower() != "epic")
-    if story_count < 8:
+    if story_count < 5:
         rival_names = sorted({c.competitor_name for c in comparisons}) or ["top rival"]
         templates = [
             ("story", f"Package {feature.name} as a sellable offer", "Rewrite offer page and sales one-pager with proof points.", ["Offer page live", "One-pager approved", "Proof points cited"], "3-5 days", 5),
@@ -1336,10 +1356,6 @@ async def love_feature_and_build_tickets(
             ("story", f"Create GTM messaging kit for {feature.name}", "Homepage module, email, LinkedIn, and paid ad variants.", ["4 assets drafted", "Brand review done", "UTM naming set"], "4-5 days", 5),
             ("story", f"Close product gap called out in contested moves", "Implement the highest-confidence gap tied to this feature.", ["Gap ticket scoped", "Acceptance tests pass", "Changelog published"], "1-2 weeks", 8),
             ("task", f"Collect evidence screenshots for {feature.name}", "Capture rival pages and client proof for citations.", ["At least 5 screenshots", "URLs logged", "Shared with report"], "1 day", 2),
-            ("story", f"Enable sales objections playbook", "Handle top 5 objections with competitor evidence.", ["Playbook in Notion/Drive", "Roleplay completed", "CRM note template added"], "2-3 days", 3),
-            ("story", f"Instrument analytics for {feature.name}", "Track activation, conversion, and competitive win rate.", ["Events live", "Dashboard shared", "Baseline captured"], "3-5 days", 5),
-            ("story", f"Produce white-label weekly client update", "Turn tickets + contested moves into a client PDF narrative.", ["PDF generated", "Agency branding applied", "Delivery logged"], "1-2 days", 2),
-            ("task", f"Map Jira epic and story owners", "Assign owners and due dates inside the connected Jira project.", ["Owners set", "Due dates set", "Epic linked"], "0.5 day", 1),
         ]
         existing_heads = {_as_str(i.get("heading")).lower() for i in items}
         for ttype, heading, body, criteria, effort, points in templates:
@@ -1361,10 +1377,10 @@ async def love_feature_and_build_tickets(
                 }
             )
             existing_heads.add(heading.lower())
-            if sum(1 for i in items if _as_str(i.get("ticket_type")).lower() != "epic") >= 10:
+            if sum(1 for i in items if _as_str(i.get("ticket_type")).lower() != "epic") >= 6:
                 break
 
-    for item in items[:13]:
+    for item in items[:8]:
         ttype = _as_str(item.get("ticket_type"), "story").lower()
         if ttype not in {"epic", "story", "task"}:
             ttype = "story"
@@ -1409,6 +1425,18 @@ async def create_all_feature_tickets_in_jira(
     client_id: str,
     feature_id: str,
 ) -> list[FeatureTicket]:
+    connected = (
+        await db.execute(
+            select(Integration).where(
+                Integration.agency_id == agency_id,
+                Integration.provider == "jira",
+                Integration.is_connected.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+    if not connected or not connected.encrypted_credentials:
+        raise ValueError("Connect your Jira account first under Integrations.")
+
     tickets = (
         await db.execute(
             select(FeatureTicket)
@@ -1421,12 +1449,18 @@ async def create_all_feature_tickets_in_jira(
         )
     ).scalars().all()
     if not tickets:
-        raise ValueError("No feature tickets found.")
+        raise ValueError("No feature tickets found. Generate a development plan first.")
 
     epic_jira_key = None
     for ticket in tickets:
+        if ticket.jira_key and ticket.ticket_type == "epic":
+            epic_jira_key = ticket.jira_key
+            break
+
+    errors: list[str] = []
+    for ticket in tickets:
         if ticket.jira_key:
-            if ticket.ticket_type == "epic":
+            if ticket.ticket_type == "epic" and not epic_jira_key:
                 epic_jira_key = ticket.jira_key
             continue
         criteria = "\n".join(f"- {c}" for c in (ticket.acceptance_criteria or []))
@@ -1445,24 +1479,35 @@ async def create_all_feature_tickets_in_jira(
             f"Effort: {ticket.estimated_effort} | Points: {ticket.story_points}\n"
             f"Labels: {', '.join(ticket.labels or [])}"
         )
-        created = await jira_service.create_jira_ticket(
-            db,
-            agency_id,
-            client_id,
-            ticket.heading,
-            description,
-            insight_id=ticket.id,
-            issue_type="Epic" if ticket.ticket_type == "epic" else ("Story" if ticket.ticket_type == "story" else "Task"),
-            parent_epic_key=None if ticket.ticket_type == "epic" else epic_jira_key,
-        )
-        ticket.jira_key = created.jira_key
-        ticket.jira_url = created.jira_url
-        ticket.jira_epic_key = epic_jira_key
-        ticket.status = "created"
-        if ticket.ticket_type == "epic":
-            epic_jira_key = created.jira_key
-            ticket.jira_epic_key = created.jira_key
+        try:
+            created = await jira_service.create_jira_ticket(
+                db,
+                agency_id,
+                client_id,
+                ticket.heading,
+                description,
+                insight_id=ticket.id,
+                issue_type="Epic" if ticket.ticket_type == "epic" else ("Story" if ticket.ticket_type == "story" else "Task"),
+                parent_epic_key=None if ticket.ticket_type == "epic" else epic_jira_key,
+            )
+            ticket.jira_key = created.jira_key
+            ticket.jira_url = created.jira_url
+            ticket.jira_epic_key = epic_jira_key
+            ticket.status = "created"
+            if ticket.ticket_type == "epic":
+                epic_jira_key = created.jira_key
+                ticket.jira_epic_key = created.jira_key
+            await db.flush()
+        except Exception as exc:
+            logger.warning("Jira push failed for ticket=%s: %s", ticket.id, exc)
+            errors.append(f"{ticket.heading[:60]}: {exc}")
+            # Don't abort the whole batch — continue with remaining tickets
+            continue
+
     await db.flush()
+    pushed = sum(1 for t in tickets if t.jira_key)
+    if pushed == 0 and errors:
+        raise ValueError(errors[0] if len(errors) == 1 else f"Jira push failed ({len(errors)} errors). First: {errors[0]}")
     return list(tickets)
 
 

@@ -665,13 +665,8 @@ async def development_plan(
         raise HTTPException(status_code=404, detail="Feature not found")
     feature.is_wishlisted = True
     feature.is_loved = True
+    # Generate draft tickets only — Jira push is a separate explicit action to avoid proxy timeouts.
     tickets = await love_feature_and_build_tickets(db, ctx.agency, client, feature)
-    # Architecture: Weekly loop → wishlist → development plan → automatically create Jira tickets
-    try:
-        tickets = await create_all_feature_tickets_in_jira(db, ctx.agency.id, client.id, feature.id)
-    except Exception:
-        # Jira may be unconfigured; draft tickets still returned
-        pass
     return tickets
 
 
