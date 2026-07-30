@@ -6,9 +6,10 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
+from app.database import AsyncSessionLocal, get_db
 from app.deps import AuthContext, get_auth_context, get_tenant_client
 from app.models import (
+    Agency,
     ClientBrand,
     Competitor,
     DeliveryLog,
@@ -17,8 +18,10 @@ from app.models import (
     GapReport,
     GoalAlert,
     InsightFeedback,
+    JobStatus,
     ProductFeature,
     Report,
+    TrackingJob,
 )
 from app.services.actions import action_run_intel
 from app.services.competitive import (
@@ -29,6 +32,12 @@ from app.services.competitive import (
 )
 from app.services.reports import generate_client_report
 
+import asyncio
+import logging
+
+from fastapi.responses import JSONResponse
+
+logger = logging.getLogger("marketbiqs.competitive.api")
 router = APIRouter(tags=["competitive"])
 
 
@@ -258,16 +267,98 @@ async def auto_run(
     ctx: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
+    """
+    Start intel in the background and return immediately.
+
+    Long runs (~1–2 min) used to 500 through the Next.js/Railway rewrite proxy timeout.
+    Clients should poll GET /api/clients/{id}/jobs/{job_id} (or /jobs) until completed/failed.
+    """
     if ctx.agency.scrape_units_used >= ctx.agency.scrape_quota:
         raise HTTPException(status_code=402, detail="Scrape quota exceeded. Purchase client packs.")
     if ctx.agency.reports_used >= ctx.agency.reports_quota:
         raise HTTPException(status_code=402, detail="Report quota exceeded. Purchase client packs.")
-    try:
-        return await action_run_intel(db, ctx.agency, client, push_jira=False, generate_report=True)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)[:500]) from exc
+
+    job = TrackingJob(
+        agency_id=ctx.agency.id,
+        client_id=client.id,
+        job_type="full_ai_pipeline",
+        status=JobStatus.pending,
+        detail="Queued autonomous AI pipeline",
+        started_at=datetime.utcnow(),
+    )
+    db.add(job)
+    await db.flush()
+    job_id = job.id
+    agency_id = ctx.agency.id
+    client_id = client.id
+    # Commit before background task so the row is visible to a new session
+    await db.commit()
+
+    async def _run_in_background() -> None:
+        async with AsyncSessionLocal() as session:
+            try:
+                tracked = await session.get(TrackingJob, job_id)
+                agency = await session.get(Agency, agency_id)
+                brand = await session.get(ClientBrand, client_id)
+                if not tracked or not agency or not brand:
+                    return
+                tracked.status = JobStatus.running
+                tracked.detail = "Autonomous AI pipeline running"
+                await session.commit()
+
+                result = await action_run_intel(
+                    session, agency, brand, push_jira=False, generate_report=True
+                )
+                tracked = await session.get(TrackingJob, job_id)
+                if tracked:
+                    tracked.status = JobStatus.completed
+                    tracked.finished_at = datetime.utcnow()
+                    tracked.detail = "Autonomous AI pipeline completed"
+                    tracked.result_meta = result if isinstance(result, dict) else {"ok": True}
+                await session.commit()
+            except Exception as exc:
+                logger.exception("Background auto-run failed job=%s", job_id)
+                try:
+                    await session.rollback()
+                    tracked = await session.get(TrackingJob, job_id)
+                    if tracked:
+                        tracked.status = JobStatus.failed
+                        tracked.finished_at = datetime.utcnow()
+                        tracked.detail = str(exc)[:800]
+                        await session.commit()
+                except Exception:
+                    logger.exception("Failed to mark job %s as failed", job_id)
+
+    asyncio.create_task(_run_in_background())
+    return JSONResponse(
+        status_code=202,
+        content={
+            "status": "queued",
+            "job_id": job_id,
+            "message": "Intel started. Poll job status until completed.",
+        },
+    )
+
+
+@router.get("/clients/{client_id}/jobs/{job_id}")
+async def get_job(
+    job_id: str,
+    client: ClientBrand = Depends(get_tenant_client),
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    job = await db.get(TrackingJob, job_id)
+    if not job or job.client_id != client.id or job.agency_id != ctx.agency.id:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {
+        "id": job.id,
+        "job_type": job.job_type,
+        "status": job.status.value if hasattr(job.status, "value") else str(job.status),
+        "detail": job.detail,
+        "result_meta": job.result_meta or {},
+        "created_at": job.created_at,
+        "finished_at": job.finished_at,
+    }
 
 
 @router.get("/clients/{client_id}/weekly-loop")
