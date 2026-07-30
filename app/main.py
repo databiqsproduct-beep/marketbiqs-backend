@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from datetime import datetime
+import asyncio
 import logging
 import time
 
@@ -22,6 +23,7 @@ logger = logging.getLogger("marketbiqs")
 
 settings = get_settings()
 scheduler = AsyncIOScheduler()
+_startup_ok = {"db": False, "error": None}
 
 
 async def scheduled_ai_pipeline() -> None:
@@ -79,20 +81,43 @@ async def scheduled_delivery_pipeline() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    if settings.app_env == "production" and settings.secret_key.startswith("biqs-dev"):
-        logger.warning("Insecure SECRET_KEY detected in production — rotate before go-live")
-    await init_db()
-    if supabase_configured():
+    """Listen immediately so Railway /health passes; boot DB in the background."""
+    if settings.app_env == "production" and (
+        settings.secret_key.startswith("biqs-dev")
+        or settings.secret_key.startswith("replace-with")
+        or len(settings.secret_key) < 24
+    ):
+        logger.warning("Weak SECRET_KEY in production — rotate before go-live")
+
+    async def _boot() -> None:
         try:
-            status = await ping_supabase()
-            logger.info("Supabase ping: %s", status)
-            await ensure_reports_bucket()
-        except Exception:
-            logger.exception("Supabase startup check failed")
-    else:
-        logger.warning("Supabase API keys not configured — set SUPABASE_URL + SUPABASE_SECRET_KEY")
-    # Avoid hammering SQLite with overlapping scheduled pipelines (local/dev only)
-    if DATABASE_BACKEND != "sqlite":
+            await init_db()
+            _startup_ok["db"] = True
+            logger.info("Background DB init OK (backend=%s)", DATABASE_BACKEND)
+        except Exception as exc:
+            _startup_ok["db"] = False
+            _startup_ok["error"] = str(exc)[:300]
+            logger.exception(
+                "Database init failed — fix DATABASE_URL to Supabase pooler :6543 "
+                "(not db.*.supabase.co:5432). Error: %s",
+                _startup_ok["error"],
+            )
+            return
+
+        if supabase_configured():
+            try:
+                status = await ping_supabase()
+                logger.info("Supabase ping: %s", status)
+                await ensure_reports_bucket()
+            except Exception:
+                logger.exception("Supabase startup check failed")
+        else:
+            logger.warning("Supabase API keys not configured — set SUPABASE_URL + SUPABASE_SECRET_KEY")
+
+        if DATABASE_BACKEND == "sqlite":
+            logger.warning("Schedulers disabled on SQLite — use Postgres in production")
+            return
+
         scheduler.add_job(
             scheduled_ai_pipeline,
             "interval",
@@ -113,13 +138,14 @@ async def lifespan(_: FastAPI):
         )
         scheduler.start()
         logger.info(
-            "MarketBiqs API started (db=%s, scrape_every=%sh)",
+            "MarketBiqs API ready (db=%s, scrape_every=%sh)",
             DATABASE_BACKEND,
             settings.scrape_interval_hours,
         )
-    else:
-        logger.warning("Schedulers disabled on SQLite — use Postgres in production")
-        logger.info("MarketBiqs API started (db=%s, schedulers=off)", DATABASE_BACKEND)
+
+    # Critical for Railway: do NOT await DB before yield — otherwise /health is unreachable
+    asyncio.create_task(_boot())
+    logger.info("MarketBiqs API listening (db_backend=%s, env=%s)", DATABASE_BACKEND, settings.app_env)
     yield
     if scheduler.running:
         scheduler.shutdown(wait=False)
@@ -168,15 +194,39 @@ app.include_router(supabase_api.router, prefix="/api")
 
 @app.get("/health")
 async def health():
-    db_ok = await ping_db()
-    supabase = await ping_supabase()
-    healthy = db_ok and (supabase.get("ok") if supabase.get("configured") else True)
+    """Fast liveness for Railway. Deep checks live under /health/ready."""
     return {
-        "status": "ok" if healthy else "degraded",
+        "status": "ok",
         "service": settings.app_name,
         "database": DATABASE_BACKEND,
-        "database_reachable": db_ok,
-        "supabase": supabase,
+        "db_init": _startup_ok["db"],
         "env": settings.app_env,
-        "schedulers": ["agency_ai_pipeline", "agency_delivery_pipeline"],
     }
+
+
+@app.get("/health/ready")
+async def health_ready():
+    """Readiness: DB + optional Supabase. Not used by Railway healthcheck."""
+    try:
+        db_ok = await asyncio.wait_for(ping_db(), timeout=3)
+    except Exception:
+        db_ok = False
+    try:
+        supabase = await asyncio.wait_for(ping_supabase(), timeout=3)
+    except Exception as exc:
+        supabase = {"configured": supabase_configured(), "ok": False, "detail": str(exc)[:200]}
+    healthy = db_ok and (supabase.get("ok") if supabase.get("configured") else True)
+    return JSONResponse(
+        status_code=200 if healthy else 503,
+        content={
+            "status": "ok" if healthy else "degraded",
+            "service": settings.app_name,
+            "database": DATABASE_BACKEND,
+            "database_reachable": db_ok,
+            "db_init": _startup_ok["db"],
+            "db_init_error": _startup_ok["error"],
+            "supabase": supabase,
+            "env": settings.app_env,
+            "schedulers": ["agency_ai_pipeline", "agency_delivery_pipeline"] if scheduler.running else [],
+        },
+    )
