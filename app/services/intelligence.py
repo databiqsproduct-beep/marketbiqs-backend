@@ -19,6 +19,31 @@ from app.services.embeddings import index_client_intel, retrieve_relevant
 from app.services.tracking import scrape_radar_top_trends
 
 
+def _as_priority(value: object, default: str = "medium") -> str:
+    """Normalize AI priority to a short string (DB column is VARCHAR)."""
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        # Common LLM mistake: 1/2/3 instead of high/medium/low
+        return {1: "high", 2: "medium", 3: "low"}.get(int(value), default)
+    text = str(value).strip().lower()
+    if not text:
+        return default
+    if text in {"1", "high", "urgent", "p1"}:
+        return "high"
+    if text in {"2", "medium", "normal", "p2"}:
+        return "medium"
+    if text in {"3", "low", "p3"}:
+        return "low"
+    return text[:20]
+
+
+def _as_str(value: object, default: str = "") -> str:
+    if value is None:
+        return default
+    return str(value).strip() or default
+
+
 async def run_client_intelligence(
     db: AsyncSession,
     agency: Agency,
@@ -71,7 +96,8 @@ async def run_client_intelligence(
                 "trends (exactly up to 5 objects: {topic, platform, velocity_score, summary, keywords[]}), "
                 "sentiments (0-3 objects), insights (0-3 objects: {category, title, body, priority}). "
                 "Prefer the scraped trend topics. Tie summaries to THIS client and rivals when possible. "
-                "platform should be google_trends or multi. Keep it concise."
+                "platform should be google_trends or multi. "
+                "priority MUST be a string: high, medium, or low (never a number). Keep it concise."
             ),
             json.dumps(
                 {
@@ -115,12 +141,16 @@ async def run_client_intelligence(
                 SentimentRecord(
                     agency_id=agency.id,
                     client_id=client.id,
-                    subject=sentiment.get("subject", client.name),
-                    source=sentiment.get("source", "radar"),
+                    subject=_as_str(sentiment.get("subject"), client.name)[:255],
+                    source=_as_str(sentiment.get("source"), "radar")[:80],
                     score=float(sentiment.get("score") or 0),
-                    label=sentiment.get("label", "neutral"),
-                    themes=sentiment.get("themes") or [],
-                    sample_quotes=sentiment.get("sample_quotes") or [],
+                    label=_as_str(sentiment.get("label"), "neutral")[:40],
+                    themes=sentiment.get("themes") if isinstance(sentiment.get("themes"), list) else [],
+                    sample_quotes=(
+                        sentiment.get("sample_quotes")
+                        if isinstance(sentiment.get("sample_quotes"), list)
+                        else []
+                    ),
                 )
             )
 
@@ -131,10 +161,10 @@ async def run_client_intelligence(
                 Insight(
                     agency_id=agency.id,
                     client_id=client.id,
-                    category=insight.get("category", "trend"),
-                    title=insight.get("title", "Insight"),
-                    body=insight.get("body", ""),
-                    priority=insight.get("priority", "medium"),
+                    category=_as_str(insight.get("category"), "trend")[:80],
+                    title=_as_str(insight.get("title"), "Insight")[:255],
+                    body=_as_str(insight.get("body"), "")[:8000],
+                    priority=_as_priority(insight.get("priority")),
                     source_refs=[{"source": "apify_radar", "geo": radar.get("geo")}],
                 )
             )
@@ -168,6 +198,9 @@ async def run_client_intelligence(
             f"(Apify cost capped at ${radar.get('cost_cap_usd', 0.01)})"
         )
     except Exception as exc:
+        await db.rollback()
+        # Re-load job after rollback so we can persist failure status
+        job = await db.get(TrackingJob, job.id) or job
         job.status = JobStatus.failed
         job.finished_at = datetime.utcnow()
         job.detail = str(exc)[:800]
