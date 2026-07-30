@@ -20,9 +20,19 @@ async def action_run_intel(
     *,
     push_jira: bool = False,
     generate_report: bool = True,
+    competitor_scope: str = "local",
+    competitor_country: str | None = None,
+    competitor_count: int = 5,
 ) -> dict[str, Any]:
     return await run_full_ai_pipeline(
-        db, agency, client, push_jira=push_jira, generate_report=generate_report
+        db,
+        agency,
+        client,
+        push_jira=push_jira,
+        generate_report=generate_report,
+        competitor_scope=competitor_scope,
+        competitor_country=competitor_country,
+        competitor_count=competitor_count,
     )
 
 

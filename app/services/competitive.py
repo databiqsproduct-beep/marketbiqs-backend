@@ -530,7 +530,19 @@ def _competitors_from_serp(organic: list[dict], client_name: str) -> list[dict]:
 
 
 
-async def enrich_client_profile(db: AsyncSession, agency: Agency, client: ClientBrand) -> dict:
+async def enrich_client_profile(
+    db: AsyncSession,
+    agency: Agency,
+    client: ClientBrand,
+    *,
+    competitor_scope: str = "local",
+    competitor_country: str | None = None,
+    competitor_count: int = 5,
+) -> dict:
+    scope = "global" if str(competitor_scope).lower() == "global" else "local"
+    count = max(1, min(10, int(competitor_count or 5)))
+    country = _as_str(competitor_country).strip()
+
     site = {}
     if client.website:
         site = await scrape_website(db, agency.id, client.website)
@@ -556,6 +568,7 @@ async def enrich_client_profile(db: AsyncSession, agency: Agency, client: Client
                 "website": client.website,
                 "industry_hint": client.industry,
                 "site_markdown": site_md,
+                "preferred_market": country or None,
             }
         )[:7000],
         temperature=0.2,
@@ -585,6 +598,8 @@ async def enrich_client_profile(db: AsyncSession, agency: Agency, client: Client
     market_area = _as_str(profile.get("market_area")) or _market_area_from_client(client)
     if market_area.strip().lower() in {"global", "worldwide", "international", "world"}:
         market_area = ""
+    if scope == "local" and country:
+        market_area = country
     business_model = _as_str(profile.get("business_model")) or "services"
     description = _as_str(profile.get("description"))
     if description:
@@ -642,22 +657,37 @@ async def enrich_client_profile(db: AsyncSession, agency: Agency, client: Client
             features_by_name[key] = feature
             feature_rows.append(feature)
 
-    competitor_prompt = (
-        "Find 8-10 REAL direct competitors for this company. "
-        "They must be from the SAME niche, SAME business model, and preferably the SAME market/area "
-        "(city, country, or region the client sells into). "
-        "Return JSON: {competitors:[{name, website, why_relevant, threat_level, overlap_score, "
-        "same_niche:true, market_overlap, is_global_platform:false}]}. "
-        "Hard rules:\n"
-        "1) Prefer local/regional peer agencies, boutiques, or product companies that chase the same buyers.\n"
-        "2) EXCLUDE global hyperscalers and mega consultancies "
-        "(Accenture, IBM, Microsoft, Google, Amazon/AWS, Oracle, SAP, Deloitte, PwC, EY, KPMG, Cognizant, Infosys, TCS, Wipro, OpenAI).\n"
-        "3) EXCLUDE platforms that are tools/infrastructure rather than peer businesses "
-        "(Dialogflow, Azure AI, Watson as platforms, ManyChat).\n"
-        "4) If market_area is set, bias strongly toward rivals operating in that area or selling to that market.\n"
-        "5) why_relevant must say how they overlap on niche + buyers + geography.\n"
-        "6) Only include companies you believe actually exist."
-    )
+    if scope == "global":
+        competitor_prompt = (
+            f"Find exactly {count} REAL direct competitors for this company with GLOBAL / international reach. "
+            "They must compete in the SAME niche and product category, but can be worldwide (not limited to one country). "
+            f"Return JSON: {{competitors:[{'{'}name, website, why_relevant, threat_level, overlap_score, "
+            "same_niche:true, market_overlap, is_global_platform:false{'}'}]}}. "
+            "Hard rules:\n"
+            f"1) Return at most {count} competitors — quality over quantity.\n"
+            "2) Prefer well-known international peers in the same category (similar product, similar buyer).\n"
+            "3) EXCLUDE pure infrastructure hyperscalers used only as platforms "
+            "(AWS/Azure/GCP as clouds, Dialogflow as a raw API) unless they are a true peer product.\n"
+            "4) why_relevant must explain niche + buyer overlap on a global stage.\n"
+            "5) Only include companies you believe actually exist."
+        )
+    else:
+        focus = country or market_area or "the client's primary country/region"
+        competitor_prompt = (
+            f"Find exactly {count} REAL direct LOCAL / country competitors for this company in {focus}. "
+            "They must be from the SAME niche, SAME business model, and the SAME country/market. "
+            f"Return JSON: {{competitors:[{'{'}name, website, why_relevant, threat_level, overlap_score, "
+            "same_niche:true, market_overlap, is_global_platform:false{'}'}]}}. "
+            "Hard rules:\n"
+            f"1) Return at most {count} competitors — quality over quantity.\n"
+            f"2) Prefer local/regional peer companies operating in {focus}.\n"
+            "3) EXCLUDE global hyperscalers and mega consultancies "
+            "(Accenture, IBM, Microsoft, Google, Amazon/AWS, Oracle, SAP, Deloitte, PwC, EY, KPMG, Cognizant, Infosys, TCS, Wipro, OpenAI).\n"
+            "4) EXCLUDE platforms that are tools/infrastructure rather than peer businesses.\n"
+            f"5) Bias strongly toward rivals selling into {focus}.\n"
+            "6) why_relevant must say how they overlap on niche + buyers + geography.\n"
+            "7) Only include companies you believe actually exist."
+        )
     competitor_pack = await ai_service.structured_json(
         db,
         agency.id,
@@ -669,6 +699,9 @@ async def enrich_client_profile(db: AsyncSession, agency: Agency, client: Client
                 "industry": client.industry,
                 "niche": client.niche,
                 "market_area": market_area,
+                "competitor_scope": scope,
+                "competitor_country": country or None,
+                "competitor_count": count,
                 "business_model": business_model,
                 "features": [f.name for f in feature_rows[:10]],
                 "site_excerpt": site_md[:2000],
@@ -681,27 +714,40 @@ async def enrich_client_profile(db: AsyncSession, agency: Agency, client: Client
         competitor_items = [c for c in competitor_pack["competitors"] if isinstance(c, dict)]
 
     competitor_items = _filter_niche_competitors(
-        competitor_items, client.name, market_area=market_area, niche=_as_str(client.niche)
+        competitor_items, client.name, market_area=market_area if scope == "local" else "", niche=_as_str(client.niche)
     )
 
-    if len(competitor_items) < 4:
-        for query in _niche_competitor_queries(client, market_area):
+    min_needed = max(1, min(count, 4))
+    if len(competitor_items) < min_needed:
+        for query in _niche_competitor_queries(client, market_area if scope == "local" else (country or market_area or "")):
+            if scope == "local" and country:
+                query = f"{query} {country}"
+            elif scope == "global":
+                query = f"{query} global competitors"
             serp = await serp_visibility(db, agency.id, query)
             competitor_items.extend(_competitors_from_serp(serp.get("organic") or [], client.name))
             competitor_items = _filter_niche_competitors(
-                competitor_items, client.name, market_area=market_area, niche=_as_str(client.niche)
+                competitor_items,
+                client.name,
+                market_area=market_area if scope == "local" else "",
+                niche=_as_str(client.niche),
             )
-            if len(competitor_items) >= 4:
+            if len(competitor_items) >= min_needed:
                 break
 
-    if len(competitor_items) < 4:
+    if len(competitor_items) < min_needed:
         retry_pack = await ai_service.structured_json(
             db,
             agency.id,
             (
-                "Propose niche peer competitors only (same category + similar company size/model). "
-                "Return JSON {competitors:[{name, website, why_relevant, threat_level, overlap_score, same_niche:true}]}. "
-                "No Fortune-500 tech giants. Prefer regional/local firms in the client's market_area."
+                f"Propose exactly {count} niche peer competitors "
+                + (
+                    f"in {country or market_area or 'the local market'} only."
+                    if scope == "local"
+                    else "with global/international reach."
+                )
+                + " Return JSON {competitors:[{name, website, why_relevant, threat_level, overlap_score, same_niche:true}]}. "
+                + ("No Fortune-500 mega-platforms. Prefer local firms." if scope == "local" else "Prefer known international category peers.")
             ),
             json.dumps(
                 {
@@ -709,6 +755,9 @@ async def enrich_client_profile(db: AsyncSession, agency: Agency, client: Client
                     "niche": client.niche,
                     "industry": client.industry,
                     "market_area": market_area,
+                    "competitor_scope": scope,
+                    "competitor_country": country or None,
+                    "competitor_count": count,
                     "business_model": business_model,
                     "already_have": [c.get("name") for c in competitor_items],
                 }
@@ -718,10 +767,13 @@ async def enrich_client_profile(db: AsyncSession, agency: Agency, client: Client
         if isinstance(retry_pack.get("competitors"), list):
             competitor_items.extend([c for c in retry_pack["competitors"] if isinstance(c, dict)])
         competitor_items = _filter_niche_competitors(
-            competitor_items, client.name, market_area=market_area, niche=_as_str(client.niche)
+            competitor_items,
+            client.name,
+            market_area=market_area if scope == "local" else "",
+            niche=_as_str(client.niche),
         )
 
-    deduped = competitor_items[:10]
+    deduped = competitor_items[:count]
 
     existing = (
         await db.execute(select(Competitor).where(Competitor.client_id == client.id, Competitor.agency_id == agency.id))
@@ -775,6 +827,9 @@ async def enrich_client_profile(db: AsyncSession, agency: Agency, client: Client
     return {
         "features": len(feature_rows),
         "competitors_added": created_competitors,
+        "competitors_requested": count,
+        "competitor_scope": scope,
+        "competitor_country": country or None,
         "competitors_pruned_global": pruned_global,
         "goals": len(client.goals or []),
         "industry": client.industry,
@@ -785,7 +840,16 @@ async def enrich_client_profile(db: AsyncSession, agency: Agency, client: Client
 
 
 
-async def run_competitive_pack(db: AsyncSession, agency: Agency, client: ClientBrand) -> dict:
+async def run_competitive_pack(
+    db: AsyncSession,
+    agency: Agency,
+    client: ClientBrand,
+    *,
+    competitor_scope: str = "local",
+    competitor_country: str | None = None,
+    competitor_count: int = 5,
+) -> dict:
+    count = max(1, min(10, int(competitor_count or 5)))
     features = (
         await db.execute(
             select(ProductFeature).where(
@@ -807,7 +871,14 @@ async def run_competitive_pack(db: AsyncSession, agency: Agency, client: ClientB
     globalish = sum(1 for c in competitors if _is_global_megarival(c.name, c.website))
     needs_refresh = (not features or not competitors) or (competitors and globalish >= max(2, len(competitors) // 2))
     if needs_refresh:
-        await enrich_client_profile(db, agency, client)
+        await enrich_client_profile(
+            db,
+            agency,
+            client,
+            competitor_scope=competitor_scope,
+            competitor_country=competitor_country,
+            competitor_count=count,
+        )
         features = (
             await db.execute(
                 select(ProductFeature).where(
@@ -825,6 +896,9 @@ async def run_competitive_pack(db: AsyncSession, agency: Agency, client: ClientB
                 )
             )
         ).scalars().all()
+
+    # Honor requested rival count for this run
+    competitors = sorted(competitors, key=lambda c: float(c.overlap_score or 0), reverse=True)[:count]
 
     if not features or not competitors:
         raise ValueError(
@@ -923,13 +997,13 @@ async def run_competitive_pack(db: AsyncSession, agency: Agency, client: ClientB
     if not kept and analyzed:
         # Never leave a client with zero rivals after enrichment — keep strongest overlaps
         analyzed_sorted = sorted(analyzed, key=lambda c: float(c.overlap_score or 0), reverse=True)
-        for competitor in analyzed_sorted[:6]:
+        for competitor in analyzed_sorted[:count]:
             competitor.is_tracking = True
             if competitor.threat_level not in {"medium", "high"}:
                 competitor.threat_level = "medium"
             kept.append(competitor)
 
-    competitors = kept[:10]
+    competitors = kept[:count]
     if not competitors:
         raise ValueError("No competitors available for this client after enrichment.")
 
@@ -1539,6 +1613,9 @@ async def run_full_ai_pipeline(
     *,
     push_jira: bool = True,
     generate_report: bool = True,
+    competitor_scope: str = "local",
+    competitor_country: str | None = None,
+    competitor_count: int = 5,
 ) -> dict:
     job = TrackingJob(
         agency_id=agency.id,
@@ -1555,8 +1632,22 @@ async def run_full_ai_pipeline(
         from app.services.embeddings import index_client_intel
         from app.services.intelligence import run_client_intelligence
 
-        enrich = await enrich_client_profile(db, agency, client)
-        pack = await run_competitive_pack(db, agency, client)
+        enrich = await enrich_client_profile(
+            db,
+            agency,
+            client,
+            competitor_scope=competitor_scope,
+            competitor_country=competitor_country,
+            competitor_count=competitor_count,
+        )
+        pack = await run_competitive_pack(
+            db,
+            agency,
+            client,
+            competitor_scope=competitor_scope,
+            competitor_country=competitor_country,
+            competitor_count=competitor_count,
+        )
         radar = await run_client_intelligence(db, agency, client)
 
         report_id = None

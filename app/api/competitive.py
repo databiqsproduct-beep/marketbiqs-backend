@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -261,8 +261,31 @@ async def build_pack(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+class AutoRunRequest(BaseModel):
+    competitor_scope: str = Field(default="local", description="global or local")
+    competitor_country: str | None = Field(default=None, max_length=120)
+    competitor_count: int = Field(default=5, ge=1, le=10)
+
+    @field_validator("competitor_scope")
+    @classmethod
+    def _scope(cls, value: str) -> str:
+        cleaned = (value or "local").strip().lower()
+        if cleaned not in {"global", "local"}:
+            raise ValueError("competitor_scope must be global or local")
+        return cleaned
+
+    @field_validator("competitor_country")
+    @classmethod
+    def _country(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+
 @router.post("/clients/{client_id}/auto-run")
 async def auto_run(
+    payload: AutoRunRequest = Body(default_factory=AutoRunRequest),
     client: ClientBrand = Depends(get_tenant_client),
     ctx: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
@@ -273,6 +296,13 @@ async def auto_run(
     Long runs (~1–2 min) used to 500 through the Next.js/Railway rewrite proxy timeout.
     Clients should poll GET /api/clients/{id}/jobs/{job_id} (or /jobs) until completed/failed.
     """
+    options = payload
+    if options.competitor_scope == "local" and not options.competitor_country:
+        raise HTTPException(
+            status_code=400,
+            detail="Country is required when competitor scope is local.",
+        )
+
     if ctx.agency.scrape_units_used >= ctx.agency.scrape_quota:
         raise HTTPException(status_code=402, detail="Scrape quota exceeded. Purchase client packs.")
     if ctx.agency.reports_used >= ctx.agency.reports_quota:
@@ -283,14 +313,26 @@ async def auto_run(
         client_id=client.id,
         job_type="full_ai_pipeline",
         status=JobStatus.pending,
-        detail="Queued autonomous AI pipeline",
+        detail=(
+            f"Queued AI pipeline ({options.competitor_scope}"
+            + (f" · {options.competitor_country}" if options.competitor_country else "")
+            + f" · {options.competitor_count} rivals)"
+        ),
         started_at=datetime.utcnow(),
+        result_meta={
+            "competitor_scope": options.competitor_scope,
+            "competitor_country": options.competitor_country,
+            "competitor_count": options.competitor_count,
+        },
     )
     db.add(job)
     await db.flush()
     job_id = job.id
     agency_id = ctx.agency.id
     client_id = client.id
+    scope = options.competitor_scope
+    country = options.competitor_country
+    count = options.competitor_count
     # Commit before background task so the row is visible to a new session
     await db.commit()
 
@@ -307,7 +349,14 @@ async def auto_run(
                 await session.commit()
 
                 result = await action_run_intel(
-                    session, agency, brand, push_jira=False, generate_report=True
+                    session,
+                    agency,
+                    brand,
+                    push_jira=False,
+                    generate_report=True,
+                    competitor_scope=scope,
+                    competitor_country=country,
+                    competitor_count=count,
                 )
                 tracked = await session.get(TrackingJob, job_id)
                 if tracked:
@@ -336,6 +385,9 @@ async def auto_run(
             "status": "queued",
             "job_id": job_id,
             "message": "Intel started. Poll job status until completed.",
+            "competitor_scope": scope,
+            "competitor_country": country,
+            "competitor_count": count,
         },
     )
 
