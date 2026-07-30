@@ -30,7 +30,12 @@ class Settings(BaseSettings):
     supabase_db_url: str = ""
     supabase_db_password: str = ""
     supabase_project_ref: str = "wcseztlbcajqegmzpzqm"
-    supabase_db_region: str = "us-east-1"
+    # Must match Supabase Dashboard → Project Settings → Database → Connection string (pooler host).
+    # Wrong region/cluster causes: "Tenant or user not found" and login/register 500s.
+    supabase_db_region: str = "ap-northeast-2"
+    # Full pooler hostname from dashboard, e.g. aws-1-ap-northeast-2.pooler.supabase.com
+    # Do not guess aws-0 — new projects often land on aws-1 / aws-2.
+    supabase_pooler_host: str = "aws-1-ap-northeast-2.pooler.supabase.com"
 
     def resolved_publishable_key(self) -> str:
         return (self.supabase_publishable_key or self.supabase_anon_key or "").strip()

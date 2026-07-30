@@ -25,9 +25,17 @@ def _normalize_postgres_url(url: str) -> str:
     return url
 
 
+def _pooler_host() -> str:
+    explicit = (settings.supabase_pooler_host or "").strip()
+    if explicit:
+        return explicit.replace("https://", "").replace("http://", "").split(":")[0].strip()
+    region = (settings.supabase_db_region or "ap-northeast-2").strip()
+    # Prefer aws-1 for newer projects; override with SUPABASE_POOLER_HOST when unsure
+    return f"aws-1-{region}.pooler.supabase.com"
+
+
 def _pooler_url(ref: str, password: str, region: str | None = None) -> str:
-    region = (region or settings.supabase_db_region or "us-east-1").strip()
-    host = f"aws-0-{region}.pooler.supabase.com"
+    host = _pooler_host()
     return f"postgresql+asyncpg://postgres.{ref}:{quote_plus(password)}@{host}:6543/postgres"
 
 
@@ -67,26 +75,38 @@ def _resolve_database_url() -> tuple[str, str]:
     Production: Supabase Postgres when DATABASE_URL or SUPABASE_DB_PASSWORD is set.
     Local/dev: SQLite (./biqs.db) when Postgres is not configured.
 
-    Always prefer the Supabase pooler (6543) — required for Railway IPv4.
+    Prefer password+ref pooler (correct host) over a stale/wrong DATABASE_URL.
     """
+    pooler = _build_supabase_pooler_url()
     url = (settings.database_url or "").strip()
 
-    # Fix the common Railway failure: direct db.*:5432 → pooler :6543
+    # Fix direct IPv6 host
     if url:
         rewritten = _rewrite_direct_supabase_to_pooler(url)
         if rewritten:
             logger.warning(
-                "DATABASE_URL used direct Supabase host (IPv6) — rewritten to pooler :6543 for Railway"
+                "DATABASE_URL used direct Supabase host (IPv6) — rewritten to pooler %s",
+                _pooler_host(),
             )
             return rewritten, "postgres"
 
-    pooler = _build_supabase_pooler_url()
-
-    # Prefer password+ref pooler over a non-pooler DATABASE_URL on cloud
-    if pooler and (not url or "pooler.supabase.com" not in url):
-        if url and "pooler.supabase.com" not in url:
-            logger.warning("Using SUPABASE_DB_PASSWORD pooler URL instead of non-pooler DATABASE_URL")
-        return pooler, "postgres"
+    # Prefer known-good pooler from SUPABASE_DB_PASSWORD + host settings
+    if pooler:
+        if url and "pooler.supabase.com" in url:
+            want = urlparse(pooler).hostname
+            have = urlparse(_normalize_postgres_url(url)).hostname
+            if have != want:
+                logger.warning(
+                    "DATABASE_URL pooler host %s is wrong for this project — using %s",
+                    have,
+                    want,
+                )
+                return pooler, "postgres"
+            return _normalize_postgres_url(url), "postgres"
+        if not url or "pooler.supabase.com" not in url:
+            if url:
+                logger.warning("Using SUPABASE_DB_PASSWORD pooler URL instead of non-pooler DATABASE_URL")
+            return pooler, "postgres"
 
     if url:
         if "sqlite" in url:
@@ -98,9 +118,6 @@ def _resolve_database_url() -> tuple[str, str]:
         if rewritten:
             return rewritten, "postgres"
         return _normalize_postgres_url(settings.supabase_db_url), "postgres"
-
-    if pooler:
-        return pooler, "postgres"
 
     logger.warning(
         "Supabase Postgres not configured (set DATABASE_URL or SUPABASE_DB_PASSWORD). "
