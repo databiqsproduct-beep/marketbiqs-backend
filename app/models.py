@@ -466,7 +466,7 @@ class GoalAlert(Base):
     goal: Mapped[str] = mapped_column(String(500), nullable=False)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     why_it_matters: Mapped[str] = mapped_column(Text, nullable=False)
-    impact: Mapped[str] = mapped_column(String(20), default="medium")
+    impact: Mapped[str] = mapped_column(String(255), default="medium")
     action: Mapped[str] = mapped_column(Text, nullable=False)
     content_draft: Mapped[str] = mapped_column(Text, default="")
     estimated_cost: Mapped[str] = mapped_column(String(120), default="")

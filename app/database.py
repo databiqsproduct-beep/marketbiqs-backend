@@ -204,12 +204,37 @@ async def _ensure_pg_extensions() -> None:
         logger.warning("Could not ensure PG extensions (normal on Supabase pooler); continuing")
 
 
+async def _apply_schema_patches() -> None:
+    """Widen/fix columns create_all will not alter on existing Postgres tables."""
+    if DATABASE_BACKEND != "postgres":
+        return
+    patches = [
+        "ALTER TABLE goal_alerts ALTER COLUMN impact TYPE VARCHAR(255)",
+        "ALTER TABLE goal_alerts ALTER COLUMN evidence_strength TYPE VARCHAR(40)",
+        "ALTER TABLE feature_comparisons ALTER COLUMN evidence_strength TYPE VARCHAR(40)",
+        "ALTER TABLE gap_reports ALTER COLUMN evidence_strength TYPE VARCHAR(40)",
+        # Supabase SQL sometimes created uuid ids; app uses text UUIDs
+        "ALTER TABLE intel_embeddings ALTER COLUMN id TYPE text USING id::text",
+        "ALTER TABLE intel_embeddings ALTER COLUMN agency_id TYPE text USING agency_id::text",
+        "ALTER TABLE intel_embeddings ALTER COLUMN client_id TYPE text USING client_id::text",
+        # Prefer jsonb over vector for optional embedding payload from the ORM
+        "ALTER TABLE intel_embeddings ALTER COLUMN embedding TYPE jsonb USING NULL",
+    ]
+    async with engine.begin() as conn:
+        for stmt in patches:
+            try:
+                await conn.execute(text(stmt))
+            except Exception as exc:
+                logger.debug("Schema patch skipped (%s): %s", stmt[:60], exc)
+
+
 async def init_db() -> None:
     from app import models  # noqa: F401
 
     await _ensure_pg_extensions()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    await _apply_schema_patches()
     # Log host only (never password) so Railway logs show pooler vs direct
     try:
         host = urlparse(DATABASE_URL).hostname

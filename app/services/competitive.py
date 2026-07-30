@@ -27,6 +27,24 @@ from app.services.tracking import scrape_website, serp_visibility
 logger = logging.getLogger("marketbiqs.competitive")
 
 
+def _clip(value: str | None, max_len: int) -> str:
+    text = (value or "").strip()
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 1].rstrip() + "…"
+
+
+def _level_label(value: str | None, default: str = "medium", *, max_len: int = 40) -> str:
+    """Normalize AI severity labels; allow short free text up to max_len."""
+    raw = _as_str(value, default).strip()
+    lowered = raw.lower()
+    if lowered in {"low", "medium", "high", "critical"}:
+        return lowered
+    if not raw:
+        return default
+    return _clip(raw, max_len)
+
+
 _WEAK_COMPARISON_MARKERS = (
     "none",
     "n/a",
@@ -929,6 +947,7 @@ async def run_competitive_pack(db: AsyncSession, agency: Agency, client: ClientB
             "gap_reports (array of {competitor_name, summary, leading[], lagging[], opportunities[]}), "
             "goal_alerts (array of {goal, title, why_it_matters, impact, action, content_draft, estimated_cost, competitor_trigger, missing_feature}), "
             "highlights (string array of sharp executive takeaways). "
+            "impact MUST be exactly one of: low | medium | high (never a sentence). "
             "ALERT RULE: only create alerts for features/specialties competitors have that the client does NOT have. "
             "Do not alert on features the client already owns. Be specific. No generic filler."
         ),
@@ -1101,17 +1120,19 @@ async def run_competitive_pack(db: AsyncSession, agency: Agency, client: ClientB
             GoalAlert(
                 agency_id=agency.id,
                 client_id=client.id,
-                goal=_as_str(alert.get("goal") or ((client.goals or ["Grow market share"])[0])),
-                title=title,
+                goal=_clip(_as_str(alert.get("goal") or ((client.goals or ["Grow market share"])[0])), 500),
+                title=_clip(title, 500),
                 why_it_matters=why,
-                impact=_as_str(alert.get("impact"), "medium"),
+                impact=_level_label(alert.get("impact"), "medium", max_len=255),
                 action=action or f"Prioritize a response to {title}",
                 content_draft=_as_str(alert.get("content_draft")),
-                estimated_cost=_as_str(alert.get("estimated_cost")),
-                competitor_trigger=_as_str(alert.get("competitor_trigger") or alert.get("missing_feature")),
+                estimated_cost=_clip(_as_str(alert.get("estimated_cost")), 120),
+                competitor_trigger=_clip(
+                    _as_str(alert.get("competitor_trigger") or alert.get("missing_feature")), 255
+                ),
                 citations=citations,
                 confidence_score=conf,
-                evidence_strength=_as_str(alert.get("evidence_strength"), "medium"),
+                evidence_strength=_level_label(alert.get("evidence_strength"), "medium"),
             )
         )
         alert_count += 1
@@ -1141,17 +1162,17 @@ async def run_competitive_pack(db: AsyncSession, agency: Agency, client: ClientB
                 GoalAlert(
                     agency_id=agency.id,
                     client_id=client.id,
-                    goal=((client.goals or ["Close competitive gaps"])[0]),
-                    title=f"Missing specialty: {feat}",
+                    goal=_clip(((client.goals or ["Close competitive gaps"])[0]), 500),
+                    title=_clip(f"Missing specialty: {feat}", 500),
                     why_it_matters=why,
                     impact="high",
                     action=action,
                     content_draft=f"Buyers comparing you to {comp_name} will ask about {feat}. Prepare a gap-close narrative this week.",
                     estimated_cost="1-2 sprints",
-                    competitor_trigger=comp_name,
+                    competitor_trigger=_clip(comp_name, 255),
                     citations=citations or [],
                     confidence_score=confidence,
-                    evidence_strength=evidence,
+                    evidence_strength=_level_label(evidence, "medium"),
                 )
             )
             alert_count += 1
@@ -1564,7 +1585,13 @@ async def run_full_ai_pipeline(
                 except Exception:
                     continue
 
-        indexed = await index_client_intel(db, agency.id, client)
+        indexed = 0
+        try:
+            async with db.begin_nested():
+                indexed = await index_client_intel(db, agency.id, client)
+        except Exception as emb_exc:
+            logger.warning("index_client_intel skipped: %s", emb_exc)
+            indexed = 0
 
         result = {
             "enrich": enrich,
