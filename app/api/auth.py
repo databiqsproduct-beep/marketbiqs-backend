@@ -64,7 +64,7 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
     )
     await db.flush()
     token = create_access_token(user.id, {"agency_id": agency.id})
-    return TokenResponse(access_token=token)
+    return TokenResponse(access_token=token, agency_id=agency.id)
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -77,8 +77,9 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
             select(AgencyMember).where(AgencyMember.user_id == user.id, AgencyMember.is_active.is_(True))
         )
     ).scalars().first()
-    extra = {"agency_id": membership.agency_id} if membership else {}
-    return TokenResponse(access_token=create_access_token(user.id, extra))
+    agency_id = membership.agency_id if membership else None
+    extra = {"agency_id": agency_id} if agency_id else {}
+    return TokenResponse(access_token=create_access_token(user.id, extra), agency_id=agency_id)
 
 
 @router.get("/me", response_model=dict)

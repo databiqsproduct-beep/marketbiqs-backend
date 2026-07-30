@@ -7,6 +7,7 @@ from pydantic import BaseModel, EmailStr, Field, HttpUrl, field_validator
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    agency_id: str | None = None
 
 
 class UserOut(BaseModel):

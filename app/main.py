@@ -81,6 +81,11 @@ async def scheduled_delivery_pipeline() -> None:
 async def lifespan(_: FastAPI):
     if settings.app_env == "production" and settings.secret_key.startswith("biqs-dev"):
         logger.warning("Insecure SECRET_KEY detected in production — rotate before go-live")
+    if settings.app_env == "production" and DATABASE_BACKEND == "sqlite":
+        logger.error(
+            "PRODUCTION IS USING SQLITE — set DATABASE_URL or SUPABASE_DB_PASSWORD on Railway. "
+            "Ephemeral disk wipes users/memberships on every deploy (causes auth 403s)."
+        )
     await init_db()
     if supabase_configured():
         try:

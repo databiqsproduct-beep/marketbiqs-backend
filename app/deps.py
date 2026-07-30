@@ -39,6 +39,7 @@ async def get_current_user(
 
 async def get_auth_context(
     user: User = Depends(get_current_user),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
     db: AsyncSession = Depends(get_db),
     x_agency_id: str | None = Header(default=None, alias="X-Agency-Id"),
 ) -> AuthContext:
@@ -51,12 +52,22 @@ async def get_auth_context(
     memberships = list(result.scalars().all())
     if not memberships:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No agency membership")
+
+    # Prefer JWT claim, then header — ignore stale X-Agency-Id from a previous account/session.
+    jwt_agency_id: str | None = None
+    if credentials:
+        try:
+            jwt_agency_id = decode_token(credentials.credentials).get("agency_id")
+        except ValueError:
+            jwt_agency_id = None
+
+    preferred = jwt_agency_id or x_agency_id
     membership = memberships[0]
-    if x_agency_id:
-        match = next((m for m in memberships if m.agency_id == x_agency_id), None)
-        if not match:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Agency access denied")
-        membership = match
+    if preferred:
+        match = next((m for m in memberships if m.agency_id == preferred), None)
+        if match:
+            membership = match
+        # Stale header that doesn't match this user → fall back to first membership (do not 403)
     return AuthContext(user=user, agency=membership.agency, membership=membership)
 
 
