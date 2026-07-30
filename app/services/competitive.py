@@ -773,15 +773,28 @@ async def enrich_client_profile(
             niche=_as_str(client.niche),
         )
 
-    deduped = competitor_items[:count]
-
     existing = (
         await db.execute(select(Competitor).where(Competitor.client_id == client.id, Competitor.agency_id == agency.id))
     ).scalars().all()
     by_name = {_as_str(c.name).lower(): c for c in existing}
 
+    # Always keep existing/manual rivals — boost + pin so they survive AI prune & count slices
+    protected_existing = [c for c in existing if c.is_tracking or c.is_pinned]
+    for competitor in protected_existing:
+        looks_manual = (competitor.overlap_score or 0) < 55 or not (competitor.feature_list or [])
+        competitor.is_tracking = True
+        if (competitor.overlap_score or 0) < 55:
+            competitor.overlap_score = 70.0
+        if not competitor.threat_level or competitor.threat_level == "low":
+            competitor.threat_level = "medium"
+        if looks_manual or competitor.is_pinned:
+            competitor.is_pinned = True
+        if not competitor.why_dangerous:
+            competitor.why_dangerous = f"Existing rival kept for {client.name}"
+
     pruned_global = 0
     for competitor in existing:
+        # Never auto-drop pinned (manual) rivals
         if competitor.is_pinned:
             continue
         if _is_global_megarival(competitor.name, competitor.website):
@@ -789,6 +802,16 @@ async def enrich_client_profile(
             competitor.threat_level = "low"
             competitor.overlap_score = min(float(competitor.overlap_score or 0), 30)
             pruned_global += 1
+
+    # Fill remaining slots with AI discoveries only
+    ai_slots = max(0, count - len(protected_existing))
+    # Prefer names AI has not already listed as existing
+    existing_names = {_as_str(c.name).lower() for c in protected_existing}
+    fresh_items = [
+        c for c in competitor_items
+        if isinstance(c, dict) and _as_str(c.get("name")).lower() not in existing_names
+    ]
+    deduped = fresh_items[:ai_slots]
 
     created_competitors = 0
     for item in deduped:
@@ -800,13 +823,16 @@ async def enrich_client_profile(
             overlap = 70.0
         key = name.lower()
         why = _as_str(item.get("why_relevant"))
+        if not name:
+            continue
         if key in by_name:
             competitor = by_name[key]
             competitor.website = _as_str(item.get("website")) or competitor.website
             competitor.description = why or competitor.description
             competitor.why_dangerous = why or competitor.why_dangerous
-            competitor.threat_level = threat if threat in {"medium", "high"} else "high"
-            competitor.overlap_score = max(overlap, competitor.overlap_score or 0)
+            if not competitor.is_pinned:
+                competitor.threat_level = threat if threat in {"medium", "high"} else "high"
+                competitor.overlap_score = max(overlap, competitor.overlap_score or 0)
             competitor.is_tracking = True
         else:
             competitor = Competitor(
@@ -830,6 +856,7 @@ async def enrich_client_profile(
         "competitors_requested": count,
         "competitor_scope": scope,
         "competitor_country": country or None,
+        "competitors_kept_existing": len(protected_existing),
         "competitors_pruned_global": pruned_global,
         "goals": len(client.goals or []),
         "industry": client.industry,
@@ -897,8 +924,15 @@ async def run_competitive_pack(
             )
         ).scalars().all()
 
-    # Honor requested rival count for this run
-    competitors = sorted(competitors, key=lambda c: float(c.overlap_score or 0), reverse=True)[:count]
+    # Honor requested rival count, but never drop pinned (manual) rivals
+    pinned = [c for c in competitors if c.is_pinned]
+    others = sorted(
+        [c for c in competitors if not c.is_pinned],
+        key=lambda c: float(c.overlap_score or 0),
+        reverse=True,
+    )
+    remaining_slots = max(0, count - len(pinned))
+    competitors = pinned + others[:remaining_slots]
 
     if not features or not competitors:
         raise ValueError(
@@ -994,6 +1028,18 @@ async def run_competitive_pack(
             competitor.threat_level = "medium"
         kept.append(competitor)
 
+    # Always put pinned/manual rivals back even if AI scored them weakly
+    kept_ids = {c.id for c in kept}
+    for competitor in analyzed:
+        if competitor.is_pinned and competitor.id not in kept_ids:
+            competitor.is_tracking = True
+            if competitor.threat_level == "low":
+                competitor.threat_level = "medium"
+            if (competitor.overlap_score or 0) < 55:
+                competitor.overlap_score = 70.0
+            kept.insert(0, competitor)
+            kept_ids.add(competitor.id)
+
     if not kept and analyzed:
         # Never leave a client with zero rivals after enrichment — keep strongest overlaps
         analyzed_sorted = sorted(analyzed, key=lambda c: float(c.overlap_score or 0), reverse=True)
@@ -1003,7 +1049,12 @@ async def run_competitive_pack(
                 competitor.threat_level = "medium"
             kept.append(competitor)
 
-    competitors = kept[:count]
+    competitors = kept[: max(count, len([c for c in kept if c.is_pinned]))]
+    # Prefer pinned first in the final set
+    competitors = sorted(competitors, key=lambda c: (1 if c.is_pinned else 0, float(c.overlap_score or 0)), reverse=True)
+    pinned_final = [c for c in competitors if c.is_pinned]
+    others_final = [c for c in competitors if not c.is_pinned]
+    competitors = pinned_final + others_final[: max(0, count - len(pinned_final))]
     if not competitors:
         raise ValueError("No competitors available for this client after enrichment.")
 

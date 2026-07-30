@@ -143,9 +143,21 @@ async def add_competitor(
     db: AsyncSession = Depends(get_db),
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    competitor = Competitor(agency_id=ctx.agency.id, client_id=client.id, **payload.model_dump())
+    data = payload.model_dump()
+    competitor = Competitor(
+        agency_id=ctx.agency.id,
+        client_id=client.id,
+        **data,
+        # Keep manual rivals in intel runs (protected from AI prune + count slice)
+        is_tracking=True,
+        is_pinned=True,
+        overlap_score=75.0,
+        threat_level="high",
+        why_dangerous=f"Manually added rival for {client.name}",
+    )
     db.add(competitor)
     await db.flush()
+    await db.refresh(competitor)
     return competitor
 
 
