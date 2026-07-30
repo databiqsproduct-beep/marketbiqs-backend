@@ -10,6 +10,7 @@ from reportlab.lib.units import inch
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from xml.sax.saxutils import escape
 
 from app.models import (
     Agency,
@@ -30,6 +31,12 @@ logger = logging.getLogger("marketbiqs.reports")
 
 REPORTS_DIR = Path(__file__).resolve().parents[2] / "storage" / "reports"
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _pdf_text(value: object) -> str:
+    """Escape text for ReportLab Paragraph (XML) while keeping line breaks."""
+    text = "" if value is None else str(value)
+    return escape(text).replace("\n", "<br/>")
 
 
 def _fallback_report(
@@ -357,29 +364,34 @@ async def _write_pdf(agency: Agency, client: ClientBrand, report: Report) -> Pat
     body = styles["BodyText"]
     doc = SimpleDocTemplate(str(path), pagesize=letter, leftMargin=0.75 * inch, rightMargin=0.75 * inch)
     story = [
-        Paragraph(agency.name, brand),
-        Paragraph(report.title, styles["Heading2"]),
-        Paragraph(f"Prepared for {client.name} · {report.period_label} · {datetime.utcnow():%Y-%m-%d}", body),
+        Paragraph(_pdf_text(agency.name), brand),
+        Paragraph(_pdf_text(report.title), styles["Heading2"]),
+        Paragraph(
+            _pdf_text(f"Prepared for {client.name} · {report.period_label} · {datetime.utcnow():%Y-%m-%d}"),
+            body,
+        ),
         Spacer(1, 12),
         Paragraph("Executive Summary", heading),
-        Paragraph(report.summary.replace("\n", "<br/>"), body),
+        Paragraph(_pdf_text(report.summary or "No summary available."), body),
     ]
     for section in report.sections or []:
-        story.append(Paragraph(section.get("heading", "Section"), heading))
-        for bullet in section.get("bullets", []):
-            story.append(Paragraph(f"• {bullet}", body))
+        if not isinstance(section, dict):
+            continue
+        story.append(Paragraph(_pdf_text(section.get("heading") or "Section"), heading))
+        for bullet in section.get("bullets") or []:
+            story.append(Paragraph(f"• {_pdf_text(bullet)}", body))
             story.append(Spacer(1, 4))
     if agency.report_footer:
         story.append(Spacer(1, 20))
-        story.append(Paragraph(agency.report_footer, body))
+        story.append(Paragraph(_pdf_text(agency.report_footer), body))
     else:
         story.append(Spacer(1, 20))
-        story.append(Paragraph(f"Confidential · Prepared by {agency.name}", body))
+        story.append(Paragraph(_pdf_text(f"Confidential · Prepared by {agency.name}"), body))
 
     meta = [
-        ["Agency", agency.name],
-        ["Client", client.name],
-        ["Report ID", report.id],
+        ["Agency", _pdf_text(agency.name)],
+        ["Client", _pdf_text(client.name)],
+        ["Report ID", _pdf_text(report.id)],
         ["Generated", datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")],
     ]
     table = Table(meta, colWidths=[1.5 * inch, 5 * inch])
@@ -400,3 +412,56 @@ async def _write_pdf(agency: Agency, client: ClientBrand, report: Report) -> Pat
     story.append(table)
     doc.build(story)
     return path
+
+
+async def ensure_report_pdf_bytes(
+    db: AsyncSession,
+    agency: Agency,
+    report: Report,
+) -> bytes:
+    """
+    Return PDF bytes for a report.
+
+    Prefer Supabase Storage, then local disk. If neither exists (common on Railway
+    after redeploy), regenerate from stored report content and re-upload.
+    """
+    # 1) Supabase
+    if report.pdf_path and report.pdf_path.startswith("supabase://"):
+        try:
+            from app.services.supabase_client import download_report_pdf_bytes
+
+            data = await download_report_pdf_bytes(report.pdf_path)
+            if data:
+                return data
+        except Exception as exc:
+            logger.warning("Supabase PDF download failed for %s: %s", report.id, exc)
+
+    # 2) Local path recorded on the report
+    candidates: list[Path] = []
+    if report.pdf_path and not report.pdf_path.startswith("supabase://"):
+        candidates.append(Path(report.pdf_path))
+    candidates.append(REPORTS_DIR / f"{report.id}.pdf")
+    for path in candidates:
+        try:
+            if path.exists() and path.is_file():
+                return path.read_bytes()
+        except OSError:
+            continue
+
+    # 3) Regenerate from DB content
+    client = await db.get(ClientBrand, report.client_id)
+    if not client:
+        raise FileNotFoundError("Client missing for report PDF regeneration")
+    path = await _write_pdf(agency, client, report)
+    data = path.read_bytes()
+    report.pdf_path = str(path)
+    try:
+        from app.services.supabase_client import upload_report_pdf
+
+        remote = await upload_report_pdf(report.id, data)
+        if remote:
+            report.pdf_path = remote
+    except Exception as exc:
+        logger.warning("Could not re-upload regenerated PDF %s: %s", report.id, exc)
+    await db.flush()
+    return data

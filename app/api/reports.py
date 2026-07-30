@@ -1,7 +1,5 @@
-from pathlib import Path
-
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,8 +7,7 @@ from app.database import get_db
 from app.deps import AuthContext, get_auth_context, get_tenant_client
 from app.models import ClientBrand, Report
 from app.schemas import ReportGenerateRequest, ReportOut
-from app.services.reports import generate_client_report
-from app.services.supabase_client import download_report_pdf_bytes
+from app.services.reports import ensure_report_pdf_bytes, generate_client_report
 
 router = APIRouter(tags=["reports"])
 
@@ -69,26 +66,20 @@ async def download_pdf(
     report = await db.get(Report, report_id)
     if not report or report.agency_id != ctx.agency.id:
         raise HTTPException(status_code=404, detail="Report not found")
-    filename = f"{report.title.replace(' ', '_')}.pdf"
 
-    if report.pdf_path and report.pdf_path.startswith("supabase://"):
-        data = await download_report_pdf_bytes(report.pdf_path)
-        if not data:
-            # Fall back to local file if storage object missing
-            local = Path("storage/reports") / f"{report.id}.pdf"
-            if local.exists():
-                return FileResponse(str(local), media_type="application/pdf", filename=filename)
-            raise HTTPException(status_code=404, detail="PDF not available in Supabase Storage")
-        return Response(
-            content=data,
-            media_type="application/pdf",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
+    try:
+        data = await ensure_report_pdf_bytes(db, ctx.agency, report)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=f"PDF not available ({exc})") from exc
 
-    if not report.pdf_path or not Path(report.pdf_path).exists():
-        raise HTTPException(status_code=404, detail="PDF not available")
-    return FileResponse(
-        report.pdf_path,
+    # ASCII-safe filename for Content-Disposition (titles often include em dashes)
+    safe = "".join(ch if (ch.isalnum() or ch in "._-") else "_" for ch in (report.title or "report"))
+    filename = f"{safe[:80] or 'report'}.pdf"
+    return Response(
+        content=data,
         media_type="application/pdf",
-        filename=filename,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
     )
