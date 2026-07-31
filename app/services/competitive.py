@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime
 
 from sqlalchemy import delete, select
@@ -66,6 +67,26 @@ def _as_str(value, default: str = "") -> str:
     if isinstance(value, (int, float, bool)):
         return str(value)
     return str(value)
+
+
+def _as_int(value, default: int | None = None) -> int | None:
+    """AI returns story points as 5, '5', '5 points', or '3-5' — keep the first integer."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    match = re.search(r"\d+", _as_str(value))
+    return int(match.group()) if match else default
+
+
+def _as_list(value) -> list:
+    if isinstance(value, list):
+        return value
+    if value in (None, "", {}):
+        return []
+    return [value]
 
 
 def _is_generic_text(value) -> bool:
@@ -1470,7 +1491,7 @@ async def love_feature_and_build_tickets(
     await db.execute(delete(FeatureTicket).where(FeatureTicket.feature_id == feature.id))
     tickets: list[FeatureTicket] = []
     epic_id: str | None = None
-    items = payload.get("tickets") or []
+    items = [i for i in _as_list(payload.get("tickets")) if isinstance(i, dict)]
     if not any(_as_str(i.get("ticket_type")).lower() == "epic" for i in items):
         items = [
             {
@@ -1530,9 +1551,9 @@ async def love_feature_and_build_tickets(
         ttype = _as_str(item.get("ticket_type"), "story").lower()
         if ttype not in {"epic", "story", "task"}:
             ttype = "story"
-        criteria = item.get("acceptance_criteria") or []
+        criteria = [_as_str(c) for c in _as_list(item.get("acceptance_criteria"))]
         if ttype != "epic" and len(criteria) < 3:
-            criteria = list(criteria) + [
+            criteria = criteria + [
                 "Definition of done reviewed with agency lead",
                 "Competitor evidence linked",
                 "Deliverable shared with client stakeholder",
@@ -1542,17 +1563,17 @@ async def love_feature_and_build_tickets(
             agency_id=agency.id,
             client_id=client.id,
             feature_id=feature.id,
-            heading=item.get("heading", f"Improve {feature.name}"),
-            body=item.get("body", ""),
+            heading=_clip(_as_str(item.get("heading")), 500) or f"Improve {feature.name}"[:500],
+            body=_as_str(item.get("body")),
             acceptance_criteria=criteria,
-            priority=item.get("priority", "medium"),
+            priority=_level_label(item.get("priority"), "medium", max_len=20),
             ticket_type=ttype,
-            labels=item.get("labels") or [feature.category, "loved-feature"],
-            estimated_effort=item.get("estimated_effort", ""),
-            story_points=item.get("story_points"),
-            why_useful=item.get("why_useful", ""),
-            competitor_context=item.get("competitor_context", ""),
-            evidence_links=item.get("evidence_links") or evidence[:4],
+            labels=[_as_str(l) for l in _as_list(item.get("labels"))] or [feature.category, "loved-feature"],
+            estimated_effort=_clip(_as_str(item.get("estimated_effort")), 80),
+            story_points=_as_int(item.get("story_points")),
+            why_useful=_as_str(item.get("why_useful")),
+            competitor_context=_as_str(item.get("competitor_context")),
+            evidence_links=_as_list(item.get("evidence_links")) or evidence[:4],
             parent_ticket_id=None if ttype == "epic" else epic_id,
             status="draft",
         )
