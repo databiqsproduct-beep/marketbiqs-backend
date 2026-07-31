@@ -28,7 +28,7 @@ begin
   foreach t in array array[
     'agencies','users','agency_members','client_brands','competitors',
     'competitor_snapshots','product_features','feature_comparisons',
-    'gap_reports','goal_alerts','feature_tickets','insight_feedback',
+    'gap_reports','goal_alerts','feature_tickets','biqs_tickets','insight_feedback',
     'reports','delivery_logs','usage_events','integrations','jira_tickets',
     'api_key_vaults','white_label_api_keys','insights','trend_signals',
     'sentiment_records','tracking_jobs','intel_embeddings','chat_messages'
@@ -52,7 +52,7 @@ begin
   foreach t in array array[
     'client_brands','competitors','competitor_snapshots','product_features',
     'feature_comparisons','gap_reports','goal_alerts','feature_tickets',
-    'insight_feedback','reports','delivery_logs','insights','trend_signals',
+    'biqs_tickets','insight_feedback','reports','delivery_logs','insights','trend_signals',
     'sentiment_records','tracking_jobs','intel_embeddings','chat_messages',
     'jira_tickets','usage_events'
   ]

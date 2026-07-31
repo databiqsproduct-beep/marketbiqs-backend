@@ -10,6 +10,7 @@ from app.database import AsyncSessionLocal, get_db
 from app.deps import AuthContext, get_auth_context, get_tenant_client
 from app.models import (
     Agency,
+    BiqsTicket,
     ClientBrand,
     Competitor,
     DeliveryLog,
@@ -171,6 +172,50 @@ class TicketOut(BaseModel):
     @classmethod
     def list_fields(cls, value: Any) -> list:
         return _none_to_list(value)
+
+
+BIQS_STATUSES = ("backlog", "todo", "in_progress", "in_review", "done")
+BIQS_DEFAULT_STATUS = "todo"
+
+
+class BiqsTicketOut(BaseModel):
+    id: str
+    feature_id: str | None = None
+    source_ticket_id: str | None = None
+    heading: str
+    body: str = ""
+    acceptance_criteria: list = Field(default_factory=list)
+    priority: str
+    ticket_type: str
+    labels: list = Field(default_factory=list)
+    estimated_effort: str = ""
+    story_points: int | None = None
+    why_useful: str = ""
+    competitor_context: str = ""
+    status: str
+    board_order: int = 0
+
+    model_config = {"from_attributes": True}
+
+    @field_validator("acceptance_criteria", "labels", mode="before")
+    @classmethod
+    def list_fields(cls, value: Any) -> list:
+        return _none_to_list(value)
+
+
+class BiqsTicketUpdate(BaseModel):
+    status: str | None = None
+    board_order: int | None = None
+
+    @field_validator("status")
+    @classmethod
+    def known_status(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if normalized not in BIQS_STATUSES:
+            raise ValueError(f"status must be one of: {', '.join(BIQS_STATUSES)}")
+        return normalized
 
 
 class FeedbackIn(BaseModel):
@@ -938,6 +983,107 @@ async def create_all_tickets(
         return await create_all_feature_tickets_in_jira(db, ctx.agency.id, client.id, feature_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/clients/{client_id}/features/{feature_id}/tickets/push-biqs", response_model=list[BiqsTicketOut])
+async def push_tickets_to_biqs(
+    feature_id: str,
+    client: ClientBrand = Depends(get_tenant_client),
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    source = (
+        await db.execute(
+            select(FeatureTicket)
+            .where(
+                FeatureTicket.feature_id == feature_id,
+                FeatureTicket.client_id == client.id,
+                FeatureTicket.agency_id == ctx.agency.id,
+            )
+            .order_by(FeatureTicket.created_at.asc())
+        )
+    ).scalars().all()
+    if not source:
+        raise HTTPException(status_code=400, detail="No tickets found. Generate a development plan first.")
+
+    already = set(
+        (
+            await db.execute(
+                select(BiqsTicket.source_ticket_id).where(
+                    BiqsTicket.client_id == client.id,
+                    BiqsTicket.agency_id == ctx.agency.id,
+                    BiqsTicket.source_ticket_id.is_not(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    start_order = (
+        await db.execute(
+            select(func.count())
+            .select_from(BiqsTicket)
+            .where(BiqsTicket.client_id == client.id, BiqsTicket.status == BIQS_DEFAULT_STATUS)
+        )
+    ).scalar_one()
+
+    created: list[BiqsTicket] = []
+    for offset, ticket in enumerate(t for t in source if t.id not in already):
+        card = BiqsTicket(
+            agency_id=ctx.agency.id,
+            client_id=client.id,
+            feature_id=ticket.feature_id,
+            source_ticket_id=ticket.id,
+            heading=ticket.heading,
+            body=ticket.body or "",
+            acceptance_criteria=ticket.acceptance_criteria or [],
+            priority=ticket.priority,
+            ticket_type=ticket.ticket_type,
+            labels=ticket.labels or [],
+            estimated_effort=ticket.estimated_effort or "",
+            story_points=ticket.story_points,
+            why_useful=ticket.why_useful or "",
+            competitor_context=ticket.competitor_context or "",
+            status=BIQS_DEFAULT_STATUS,
+            board_order=start_order + offset,
+        )
+        db.add(card)
+        created.append(card)
+    await db.flush()
+    return created
+
+
+@router.get("/clients/{client_id}/biqs-tickets", response_model=list[BiqsTicketOut])
+async def list_biqs_tickets(
+    client: ClientBrand = Depends(get_tenant_client),
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(BiqsTicket)
+        .where(BiqsTicket.client_id == client.id, BiqsTicket.agency_id == ctx.agency.id)
+        .order_by(BiqsTicket.board_order.asc(), BiqsTicket.created_at.asc())
+    )
+    return list(result.scalars().all())
+
+
+@router.patch("/clients/{client_id}/biqs-tickets/{ticket_id}", response_model=BiqsTicketOut)
+async def update_biqs_ticket(
+    ticket_id: str,
+    payload: BiqsTicketUpdate,
+    client: ClientBrand = Depends(get_tenant_client),
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    ticket = await db.get(BiqsTicket, ticket_id)
+    if not ticket or ticket.client_id != client.id or ticket.agency_id != ctx.agency.id:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    if payload.status is not None:
+        ticket.status = payload.status
+    if payload.board_order is not None:
+        ticket.board_order = payload.board_order
+    await db.flush()
+    return ticket
 
 
 @router.post("/clients/{client_id}/weekly-brief")

@@ -510,6 +510,32 @@ class FeatureTicket(Base):
     feature: Mapped["ProductFeature"] = relationship(back_populates="tickets")
 
 
+class BiqsTicket(Base):
+    """Ticket on the built-in Biqs board, for agencies that do not push to Jira."""
+
+    __tablename__ = "biqs_tickets"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    agency_id: Mapped[str] = mapped_column(String(36), ForeignKey("agencies.id", ondelete="CASCADE"), index=True)
+    client_id: Mapped[str] = mapped_column(String(36), ForeignKey("client_brands.id", ondelete="CASCADE"), index=True)
+    feature_id: Mapped[str | None] = mapped_column(String(36))
+    source_ticket_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    heading: Mapped[str] = mapped_column(String(500), nullable=False)
+    body: Mapped[str] = mapped_column(Text, default="")
+    acceptance_criteria: Mapped[list] = mapped_column(JSON, default=list)
+    priority: Mapped[str] = mapped_column(String(20), default="medium")
+    ticket_type: Mapped[str] = mapped_column(String(40), default="story")
+    labels: Mapped[list] = mapped_column(JSON, default=list)
+    estimated_effort: Mapped[str] = mapped_column(String(80), default="")
+    story_points: Mapped[int | None] = mapped_column(Integer)
+    why_useful: Mapped[str] = mapped_column(Text, default="")
+    competitor_context: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(40), default="backlog", index=True)
+    board_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class InsightFeedback(Base):
     __tablename__ = "insight_feedback"
 
