@@ -8,7 +8,7 @@ from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models import Agency, AgencyMember, ClientBrand, User, WhiteLabelApiKey
-from app.security import decode_token, hash_api_key
+from app.security import decode_access_token, hash_api_key
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -20,6 +20,26 @@ class AuthContext:
     membership: AgencyMember
 
 
+def _email_from_claims(payload: dict) -> str:
+    email = (payload.get("email") or "").strip().lower()
+    if email:
+        return email
+    meta = payload.get("user_metadata") or {}
+    email = (meta.get("email") or "").strip().lower()
+    if email:
+        return email
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token missing email")
+
+
+def _name_from_claims(payload: dict, email: str) -> str:
+    meta = payload.get("user_metadata") or {}
+    for key in ("full_name", "name", "preferred_username"):
+        value = (meta.get(key) or "").strip()
+        if value:
+            return value[:255]
+    return email.split("@")[0][:255] or "User"
+
+
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
     db: AsyncSession = Depends(get_db),
@@ -27,13 +47,54 @@ async def get_current_user(
     if not credentials:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     try:
-        payload = decode_token(credentials.credentials)
+        payload = decode_access_token(credentials.credentials)
         user_id = payload.get("sub")
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
+    if not user_id or not isinstance(user_id, str):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token subject")
+
+    email = _email_from_claims(payload)
+    full_name = _name_from_claims(payload, email)
+
     user = await db.get(User, user_id)
-    if not user or not user.is_active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    if user:
+        if email and user.email != email:
+            conflict = (
+                await db.execute(select(User).where(User.email == email, User.id != user_id))
+            ).scalar_one_or_none()
+            if conflict:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Email already linked to another account",
+                )
+            user.email = email
+        if full_name and (not user.full_name or user.full_name == user.email.split("@")[0]):
+            user.full_name = full_name
+        if not user.is_active:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+        await db.flush()
+        return user
+
+    # Fresh Auth user — claim email if a legacy row still holds it.
+    legacy = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
+    if legacy and legacy.id != user_id:
+        memberships = (
+            await db.execute(select(AgencyMember).where(AgencyMember.user_id == legacy.id))
+        ).scalars().all()
+        for membership in memberships:
+            membership.user_id = user_id
+        await db.delete(legacy)
+        await db.flush()
+
+    user = User(
+        id=user_id,
+        email=email,
+        full_name=full_name,
+        hashed_password=None,
+    )
+    db.add(user)
+    await db.flush()
     return user
 
 
@@ -53,11 +114,11 @@ async def get_auth_context(
     if not memberships:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No agency membership")
 
-    # Prefer JWT claim, then header — ignore stale X-Agency-Id from a previous account/session.
+    # Prefer JWT claim (legacy), then header — ignore stale X-Agency-Id from a previous session.
     jwt_agency_id: str | None = None
     if credentials:
         try:
-            jwt_agency_id = decode_token(credentials.credentials).get("agency_id")
+            jwt_agency_id = decode_access_token(credentials.credentials).get("agency_id")
         except ValueError:
             jwt_agency_id = None
 
@@ -67,7 +128,6 @@ async def get_auth_context(
         match = next((m for m in memberships if m.agency_id == preferred), None)
         if match:
             membership = match
-        # Stale header that doesn't match this user → fall back to first membership (do not 403)
     return AuthContext(user=user, agency=membership.agency, membership=membership)
 
 

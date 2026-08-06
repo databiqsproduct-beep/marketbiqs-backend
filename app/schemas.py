@@ -55,6 +55,12 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class BootstrapRequest(BaseModel):
+    agency_name: str = Field(min_length=1, max_length=200)
+    workspace_mode: str = "agency"
+    full_name: str | None = Field(default=None, max_length=255)
+
+
 class OnboardingRequest(BaseModel):
     brand_color: str | None = None
     logo_url: str | None = None

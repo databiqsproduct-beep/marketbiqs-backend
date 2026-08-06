@@ -351,12 +351,145 @@ def _extract_features_from_markdown(markdown: str, limit: int = 12) -> list[dict
             {
                 "name": line,
                 "category": "Capability",
-                "description": f"Publicly listed capability: {line}",
+                "description": (
+                    f"{line} is something this company already offers. "
+                    f"In simple terms, it is a capability they promote publicly on their website. "
+                    f"Customers can ask for this as part of what the brand sells or delivers today."
+                ),
             }
         )
         if len(features) >= limit:
             break
     return features
+
+
+
+_FEATURE_DESC_PROMPT = (
+    "For each feature, write a plain-English description a non-technical agency user can understand. "
+    "Rules for every description:\n"
+    "1) Exactly 2–3 short sentences.\n"
+    "2) Explain what the customer gets / what problem it solves — not buzzwords.\n"
+    "3) Avoid jargon like production-grade, demoware, architecture-first, hyperscale, MLOps, "
+    "unless you immediately explain it in everyday words.\n"
+    "4) Do not repeat only the feature name. Do not write marketing slogans.\n"
+    "5) Keep names as given; only rewrite descriptions.\n"
+    "Return JSON: {features:[{name, category, description}]}."
+)
+
+
+def _feature_description_is_thin(name: str, description: str) -> bool:
+    name = _as_str(name).strip()
+    desc = _as_str(description).strip()
+    if not desc:
+        return True
+    if desc.lower() == name.lower():
+        return True
+    if len(desc) < 90:
+        return True
+    # slogan-ish one-liners with little explanation
+    if desc.count(".") == 0 and len(desc) < 140:
+        return True
+    return False
+
+
+def _fallback_plain_feature_description(name: str, category: str, description: str, client_name: str) -> str:
+    name = _as_str(name).strip() or "This capability"
+    category = _as_str(category).strip() or "General"
+    raw = _as_str(description).strip()
+    soft = raw or name
+    replacements = (
+        ("production-grade ai, not demoware", "AI that is ready for real day-to-day business use — not just a flashy demo"),
+        ("production grade ai, not demoware", "AI that is ready for real day-to-day business use — not just a flashy demo"),
+        ("production-grade", "ready for real day-to-day business use"),
+        ("demoware", "a demo that looks good but is not ready for real work"),
+        ("architecture-first thinking", "planning the system carefully before building anything"),
+        ("architecture-first", "planned carefully before building"),
+        ("enterprise-grade", "built for larger companies"),
+        ("end-to-end", "handled from start to finish"),
+        ("cutting-edge", "up-to-date"),
+        ("state-of-the-art", "modern"),
+        ("ai-powered", "using AI to help"),
+        ("ml-powered", "using machine learning to help"),
+    )
+    lowered = soft
+    for a, b in replacements:
+        idx = lowered.lower().find(a.lower())
+        while idx >= 0:
+            lowered = lowered[:idx] + b + lowered[idx + len(a) :]
+            idx = lowered.lower().find(a.lower(), idx + len(b))
+    soft = " ".join(lowered.split())
+    if soft.lower() == name.lower() or len(soft) < 40:
+        soft = f"customers can use {name} as part of what {client_name or 'the brand'} delivers today"
+    cat_bit = f" ({category})" if category and category.lower() not in {"general", "capability"} else ""
+    mid = soft[0].lower() + soft[1:] if soft else "customers can use this today"
+    return (
+        f"{name} is something {client_name or 'this brand'} already offers{cat_bit}. "
+        f"In simple terms, {mid}{'' if mid.endswith('.') else '.'} "
+        f"This is part of their current offering — not a future idea."
+    )
+
+
+async def clarify_feature_descriptions(
+    db: AsyncSession,
+    agency: Agency,
+    client: ClientBrand,
+    features: list[ProductFeature] | None = None,
+) -> list[ProductFeature]:
+    """Rewrite thin/jargon feature descriptions into plain 2–3 sentence English."""
+    if features is None:
+        features = (
+            await db.execute(
+                select(ProductFeature).where(
+                    ProductFeature.client_id == client.id,
+                    ProductFeature.agency_id == agency.id,
+                    ProductFeature.is_wishlisted.is_(False),
+                )
+            )
+        ).scalars().all()
+
+    owned = [f for f in features if not f.is_wishlisted]
+    if not owned:
+        return owned
+
+    thin = [f for f in owned if _feature_description_is_thin(f.name, f.description or "")]
+    # Always clarify thin ones; if most are thin, rewrite the whole set for consistency
+    targets = owned if len(thin) >= max(1, len(owned) // 2) else thin
+    if not targets:
+        return owned
+
+    payload = [
+        {"name": f.name, "category": f.category or "General", "description": f.description or ""}
+        for f in targets
+    ]
+    rewritten = await ai_service.structured_json(
+        db,
+        agency.id,
+        _FEATURE_DESC_PROMPT
+        + f" Company name: {client.name}. Industry: {client.industry or 'unknown'}.",
+        json.dumps({"features": payload})[:6000],
+        temperature=0.2,
+    )
+    by_name: dict[str, dict] = {}
+    for item in rewritten.get("features") if isinstance(rewritten.get("features"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        key = _as_str(item.get("name")).strip().lower()
+        if key:
+            by_name[key] = item
+
+    for feat in targets:
+        item = by_name.get(_as_str(feat.name).lower())
+        new_desc = _as_str(item.get("description")) if item else ""
+        if item and item.get("category"):
+            feat.category = _as_str(item.get("category") or feat.category, "General")
+        if _feature_description_is_thin(feat.name, new_desc):
+            new_desc = _fallback_plain_feature_description(
+                feat.name, feat.category or "General", feat.description or new_desc, client.name
+            )
+        feat.description = new_desc
+
+    await db.flush()
+    return owned
 
 
 
@@ -581,6 +714,9 @@ async def enrich_client_profile(
             "(e.g. 'Pakistan', 'Karachi', 'UAE', 'MENA', 'US mid-market'). "
             "Never return only 'Global' or 'Worldwide' — use HQ or primary selling region from contact/address/phone clues. "
             "business_model = agency|product|saas|services|marketplace|other. "
+            "For each feature.description: write 2–3 plain-English sentences a non-technical person can understand. "
+            "Explain what the customer gets and why it matters. No slogans, no unexplained jargon "
+            "(avoid 'production-grade', 'demoware', 'architecture-first' unless explained simply). "
             "Use the website excerpt. Be concrete. No filler."
         ),
         json.dumps(
@@ -677,6 +813,9 @@ async def enrich_client_profile(
             db.add(feature)
             features_by_name[key] = feature
             feature_rows.append(feature)
+
+    await db.flush()
+    await clarify_feature_descriptions(db, agency, client, feature_rows)
 
     if scope == "global":
         competitor_prompt = (

@@ -26,6 +26,7 @@ from app.models import (
 )
 from app.services.actions import action_run_intel
 from app.services.competitive import (
+    clarify_feature_descriptions,
     create_all_feature_tickets_in_jira,
     love_feature_and_build_tickets,
     run_competitive_pack,
@@ -264,6 +265,30 @@ async def add_feature(
     return feature
 
 
+
+@router.post("/clients/{client_id}/features/clarify", response_model=list[FeatureOut])
+async def clarify_features(
+    client: ClientBrand = Depends(get_tenant_client),
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    """Rewrite owned feature descriptions into plain 2–3 sentence English."""
+    await clarify_feature_descriptions(db, ctx.agency, client)
+    await db.flush()
+    result = await db.execute(
+        select(ProductFeature)
+        .where(ProductFeature.client_id == client.id, ProductFeature.agency_id == ctx.agency.id)
+        .order_by(ProductFeature.created_at.desc())
+    )
+    rows = []
+    for f in result.scalars().all():
+        out = FeatureOut.model_validate(f)
+        if f.is_loved and not f.is_wishlisted:
+            out = out.model_copy(update={"is_wishlisted": True})
+        rows.append(out)
+    return rows
+
+
 @router.delete("/clients/{client_id}/features/{feature_id}")
 async def delete_feature(
     feature_id: str,
@@ -342,11 +367,18 @@ async def auto_run(
     Clients should poll GET /api/clients/{id}/jobs/{job_id} (or /jobs) until completed/failed.
     """
     options = payload
+    # Prefer explicit country for local; otherwise fall back to market note or global (stash UX).
     if options.competitor_scope == "local" and not options.competitor_country:
-        raise HTTPException(
-            status_code=400,
-            detail="Country is required when competitor scope is local.",
-        )
+        notes = client.notes or ""
+        country = ""
+        for line in notes.splitlines():
+            if line.lower().startswith("market:"):
+                country = line.split(":", 1)[1].strip()
+                break
+        if country:
+            options = options.model_copy(update={"competitor_country": country})
+        else:
+            options = options.model_copy(update={"competitor_scope": "global"})
 
     if ctx.agency.scrape_units_used >= ctx.agency.scrape_quota:
         raise HTTPException(status_code=402, detail="Scrape quota exceeded. Purchase client packs.")
@@ -602,10 +634,10 @@ async def weekly_loop(
         else None,
         "tickets_ready": tickets_count,
         "next_actions": [
-            "Review recommended missing features and improvements",
-            "Add priority items to wishlist",
-            "Open development plan + push tickets to Jira",
-            "Generate/run daily intel report",
+            "Read the suggestions below — what rivals offer that this brand still lacks",
+            "Save the important ones to the build list so the team can act on them",
+            "Open a simple build plan (and send tasks to Jira if you use it)",
+            "Write a short weekly summary you can share with the client",
         ],
     }
 

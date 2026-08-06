@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_publishable_key: str = ""
     supabase_secret_key: str = ""
+    # JWT Secret from Supabase → Project Settings → API (used to verify access tokens)
+    supabase_jwt_secret: str = ""
     # Legacy aliases (optional fallbacks)
     supabase_anon_key: str = ""
     supabase_service_role_key: str = ""
@@ -43,9 +45,16 @@ class Settings(BaseSettings):
     def resolved_secret_key(self) -> str:
         return (self.supabase_secret_key or self.supabase_service_role_key or "").strip()
 
+    def resolved_jwt_secret(self) -> str:
+        return (self.supabase_jwt_secret or "").strip()
+
     @property
     def supabase_ready(self) -> bool:
         return bool((self.supabase_url or "").strip() and self.resolved_secret_key())
+
+    @property
+    def supabase_auth_ready(self) -> bool:
+        return bool((self.supabase_url or "").strip() and self.resolved_jwt_secret())
 
     groq_api_key: str = ""
     apify_key: str = ""

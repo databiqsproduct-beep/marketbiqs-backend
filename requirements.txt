@@ -27,3 +27,4 @@ supabase>=2.10.0
 # Access Supabase with SUPABASE_URL + SUPABASE_PUBLISHABLE_KEY + SUPABASE_SECRET_KEY
 # Optional Postgres ORM: DATABASE_URL / SUPABASE_DB_PASSWORD
 # Local fallback ORM: SQLite when Postgres is not configured
+PyJWT>=2.8.0

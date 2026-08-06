@@ -21,6 +21,7 @@ from app.models import (
     MemberRole,
     ProductFeature,
     Report,
+    TrackingJob,
     TrendSignal,
     UsageEvent,
     User,
@@ -230,6 +231,28 @@ async def dashboard(ctx: AuthContext = Depends(get_auth_context), db: AsyncSessi
                 )
             )
         ).scalar_one()
+        last_job_at = (
+            await db.execute(
+                select(TrackingJob.finished_at)
+                .where(
+                    TrackingJob.client_id == client.id,
+                    TrackingJob.agency_id == agency_id,
+                    TrackingJob.finished_at.is_not(None),
+                )
+                .order_by(TrackingJob.finished_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        last_report_at = (
+            await db.execute(
+                select(Report.created_at)
+                .where(Report.client_id == client.id, Report.agency_id == agency_id)
+                .order_by(Report.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        candidates = [dt for dt in (last_job_at, last_report_at) if dt is not None]
+        last_intel_at = max(candidates) if candidates else None
         portfolio.append(
             {
                 "id": client.id,
@@ -243,6 +266,7 @@ async def dashboard(ctx: AuthContext = Depends(get_auth_context), db: AsyncSessi
                 "gaps": gaps,
                 "alerts": alerts,
                 "wishlist": wishlist,
+                "last_intel_at": last_intel_at.isoformat() if last_intel_at else None,
             }
         )
 

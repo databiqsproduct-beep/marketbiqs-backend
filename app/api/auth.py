@@ -8,43 +8,20 @@ from app.deps import AuthContext, get_auth_context, get_current_user
 from app.models import Agency, AgencyMember, MemberRole, PlanType, User, WorkspaceMode
 from app.schemas import (
     AgencyOut,
-    LoginRequest,
-    MemberOut,
+    BootstrapRequest,
     OnboardingRequest,
-    RegisterRequest,
-    TokenResponse,
     UserOut,
 )
-from app.security import create_access_token, hash_password, slugify, verify_password
+from app.security import slugify
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-@router.post("/register", response_model=TokenResponse)
-async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db)):
-    existing = (await db.execute(select(User).where(User.email == payload.email.lower()))).scalar_one_or_none()
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
-
-    user = User(
-        email=payload.email.lower(),
-        full_name=payload.full_name,
-        hashed_password=hash_password(payload.password),
-    )
-    db.add(user)
-    await db.flush()
-
-    base_slug = slugify(payload.agency_name)
-    slug = base_slug
-    i = 1
-    while (await db.execute(select(Agency).where(Agency.slug == slug))).scalar_one_or_none():
-        slug = f"{base_slug}-{i}"
-        i += 1
-
-    mode = WorkspaceMode.agency if payload.workspace_mode != "creator" else WorkspaceMode.creator
+def _agency_for_mode(name: str, slug: str, workspace_mode: str) -> Agency:
+    mode = WorkspaceMode.agency if workspace_mode != "creator" else WorkspaceMode.creator
     plan = PlanType.agency if mode == WorkspaceMode.agency else PlanType.creator
-    agency = Agency(
-        name=payload.agency_name,
+    return Agency(
+        name=name,
         slug=slug,
         workspace_mode=mode,
         plan=plan,
@@ -53,41 +30,101 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
         scrape_quota=5000 if mode == WorkspaceMode.agency else 500,
         budget_remaining_cents=45000 if mode == WorkspaceMode.agency else 3000,
     )
-    db.add(agency)
-    await db.flush()
-    db.add(
-        AgencyMember(
-            agency_id=agency.id,
-            user_id=user.id,
-            role=MemberRole.owner,
-        )
+
+
+async def _unique_agency_slug(db: AsyncSession, agency_name: str) -> str:
+    base_slug = slugify(agency_name)
+    slug = base_slug
+    i = 1
+    while (await db.execute(select(Agency).where(Agency.slug == slug))).scalar_one_or_none():
+        slug = f"{base_slug}-{i}"
+        i += 1
+    return slug
+
+
+@router.post("/register", status_code=status.HTTP_410_GONE)
+async def register_gone():
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Use Supabase Auth signUp, then POST /api/auth/bootstrap",
     )
-    await db.flush()
-    token = create_access_token(user.id, {"agency_id": agency.id})
-    return TokenResponse(access_token=token, agency_id=agency.id)
 
 
-@router.post("/login", response_model=TokenResponse)
-async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
-    user = (await db.execute(select(User).where(User.email == payload.email.lower()))).scalar_one_or_none()
-    if not user or not verify_password(payload.password, user.hashed_password):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-    membership = (
+@router.post("/login", status_code=status.HTTP_410_GONE)
+async def login_gone():
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Use Supabase Auth signIn; send the access token as Bearer",
+    )
+
+
+@router.post("/bootstrap", response_model=dict)
+async def bootstrap_agency(
+    payload: BootstrapRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create Agency + owner membership for a Supabase-authenticated user (idempotent)."""
+    if payload.full_name and payload.full_name.strip():
+        user.full_name = payload.full_name.strip()[:255]
+
+    existing = (
         await db.execute(
-            select(AgencyMember).where(AgencyMember.user_id == user.id, AgencyMember.is_active.is_(True))
+            select(AgencyMember)
+            .options(selectinload(AgencyMember.agency))
+            .where(AgencyMember.user_id == user.id, AgencyMember.is_active.is_(True))
         )
     ).scalars().first()
-    agency_id = membership.agency_id if membership else None
-    extra = {"agency_id": agency_id} if agency_id else {}
-    return TokenResponse(access_token=create_access_token(user.id, extra), agency_id=agency_id)
+    if existing:
+        return {
+            "user": UserOut.model_validate(user),
+            "agency": AgencyOut.model_validate(existing.agency),
+            "role": existing.role.value,
+            "needs_bootstrap": False,
+            "created": False,
+        }
+
+    slug = await _unique_agency_slug(db, payload.agency_name)
+    agency = _agency_for_mode(payload.agency_name.strip(), slug, payload.workspace_mode)
+    db.add(agency)
+    await db.flush()
+    membership = AgencyMember(
+        agency_id=agency.id,
+        user_id=user.id,
+        role=MemberRole.owner,
+    )
+    db.add(membership)
+    await db.flush()
+    return {
+        "user": UserOut.model_validate(user),
+        "agency": AgencyOut.model_validate(agency),
+        "role": membership.role.value,
+        "needs_bootstrap": False,
+        "created": True,
+    }
 
 
 @router.get("/me", response_model=dict)
-async def me(ctx: AuthContext = Depends(get_auth_context)):
+async def me(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    membership = (
+        await db.execute(
+            select(AgencyMember)
+            .options(selectinload(AgencyMember.agency))
+            .where(AgencyMember.user_id == user.id, AgencyMember.is_active.is_(True))
+        )
+    ).scalars().first()
+    if not membership:
+        return {
+            "user": UserOut.model_validate(user),
+            "agency": None,
+            "role": None,
+            "needs_bootstrap": True,
+        }
     return {
-        "user": UserOut.model_validate(ctx.user),
-        "agency": AgencyOut.model_validate(ctx.agency),
-        "role": ctx.membership.role.value,
+        "user": UserOut.model_validate(user),
+        "agency": AgencyOut.model_validate(membership.agency),
+        "role": membership.role.value,
+        "needs_bootstrap": False,
     }
 
 

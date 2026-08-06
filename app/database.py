@@ -219,6 +219,8 @@ async def _apply_schema_patches() -> None:
         "ALTER TABLE intel_embeddings ALTER COLUMN client_id TYPE text USING client_id::text",
         # Prefer jsonb over vector for optional embedding payload from the ORM
         "ALTER TABLE intel_embeddings ALTER COLUMN embedding TYPE jsonb USING NULL",
+        # Supabase Auth: passwords live in Auth; app users.hashed_password is optional
+        "ALTER TABLE users ALTER COLUMN hashed_password DROP NOT NULL",
     ]
     async with engine.begin() as conn:
         for stmt in patches:
