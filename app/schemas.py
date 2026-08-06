@@ -74,8 +74,8 @@ class OnboardingRequest(BaseModel):
 class MemberInvite(BaseModel):
     email: EmailStr
     full_name: str
-    password: str = Field(min_length=8)
     role: str = "analyst"
+    # Optional legacy field — ignored. Invites use Supabase Auth email invite.
 
 
 class MemberOut(BaseModel):

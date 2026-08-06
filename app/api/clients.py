@@ -1,28 +1,14 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import AsyncSessionLocal, get_db
+from app.database import get_db
 from app.deps import AuthContext, get_auth_context, get_tenant_client
-from app.models import Agency, ClientBrand, Competitor, FeatureTicket, GoalAlert, ProductFeature, Report
+from app.models import ClientBrand, Competitor, FeatureTicket, GoalAlert, ProductFeature, Report
 from app.schemas import ClientCreate, ClientOut, ClientUpdate, CompetitorCreate, CompetitorOut
-from app.services.actions import action_run_intel
 from app.services.billing import ensure_client_capacity
 
 router = APIRouter(prefix="/clients", tags=["clients"])
-
-
-async def _auto_pipeline(client_id: str, agency_id: str) -> None:
-    async with AsyncSessionLocal() as db:
-        agency = await db.get(Agency, agency_id)
-        client = await db.get(ClientBrand, client_id)
-        if not agency or not client:
-            return
-        try:
-            await action_run_intel(db, agency, client, push_jira=False, generate_report=True)
-            await db.commit()
-        except Exception:
-            await db.rollback()
 
 
 async def _enrich_client(db: AsyncSession, client: ClientBrand) -> ClientOut:
@@ -75,7 +61,6 @@ async def list_clients(ctx: AuthContext = Depends(get_auth_context), db: AsyncSe
 @router.post("", response_model=ClientOut)
 async def create_client(
     payload: ClientCreate,
-    background_tasks: BackgroundTasks,
     ctx: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
@@ -86,7 +71,8 @@ async def create_client(
     client = ClientBrand(agency_id=ctx.agency.id, **payload.model_dump())
     db.add(client)
     await db.flush()
-    background_tasks.add_task(_auto_pipeline, client.id, ctx.agency.id)
+    # Intel is started explicitly by the UI via POST /clients/{id}/auto-run
+    # (background create-time runs raced the UI and often finished with no feedback).
     return await _enrich_client(db, client)
 
 

@@ -33,10 +33,70 @@ from app.schemas import (
     MemberInvite,
     MemberOut,
 )
-from app.security import hash_password
+from app.config import get_settings
 from app.services.billing import compute_budget
 
 router = APIRouter(prefix="/agency", tags=["agency"])
+settings = get_settings()
+
+
+async def _invite_supabase_user(email: str, full_name: str) -> dict:
+    """Invite teammate via Supabase Auth (email magic invite). Returns Auth user payload."""
+    import httpx
+
+    base = (settings.supabase_url or "").strip().rstrip("/")
+    secret = settings.resolved_secret_key()
+    if not base or not secret:
+        raise HTTPException(
+            status_code=503,
+            detail="Supabase is not configured for invites. Set SUPABASE_URL and SUPABASE_SECRET_KEY.",
+        )
+    headers = {
+        "apikey": secret,
+        "Authorization": f"Bearer {secret}",
+        "Content-Type": "application/json",
+    }
+    redirect_to = f"{(settings.frontend_url or '').rstrip('/')}/auth/callback" if settings.frontend_url else None
+    body: dict = {
+        "email": email.lower(),
+        "data": {"full_name": full_name},
+    }
+    if redirect_to:
+        body["redirect_to"] = redirect_to
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        # Prefer invite endpoint (sends email). Fall back to admin create + generate link.
+        res = await client.post(f"{base}/auth/v1/invite", headers=headers, json=body)
+        if res.status_code >= 400:
+            # Existing Auth user: look them up so we can still attach membership
+            listed = await client.get(
+                f"{base}/auth/v1/admin/users",
+                headers=headers,
+                params={"page": 1, "per_page": 200},
+            )
+            if listed.status_code == 200:
+                users = (listed.json() or {}).get("users") or []
+                match = next((u for u in users if (u.get("email") or "").lower() == email.lower()), None)
+                if match:
+                    return match
+            detail = res.text
+            try:
+                payload = res.json()
+                detail = (
+                    payload.get("msg")
+                    or payload.get("error_description")
+                    or payload.get("message")
+                    or payload.get("error")
+                    or detail
+                )
+            except Exception:
+                pass
+            if res.status_code == 429 or "rate limit" in str(detail).lower():
+                raise HTTPException(
+                    status_code=429,
+                    detail="Invite email rate limit hit (Supabase free email ~2/hour). Wait and try once, or connect custom SMTP.",
+                )
+            raise HTTPException(status_code=400, detail=f"Invite failed: {detail}")
+        return res.json()
 
 
 @router.get("/dashboard", response_model=DashboardOut)
@@ -538,15 +598,41 @@ async def invite_member(
 ):
     if ctx.membership.role not in (MemberRole.owner, MemberRole.admin):
         raise HTTPException(status_code=403, detail="Insufficient permissions")
-    user = (await db.execute(select(User).where(User.email == payload.email.lower()))).scalar_one_or_none()
+    try:
+        role = MemberRole(payload.role)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid role") from exc
+
+    email = payload.email.lower().strip()
+    auth_user = await _invite_supabase_user(email, payload.full_name.strip())
+    user_id = auth_user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Invite did not return a user id")
+
+    user = await db.get(User, user_id)
     if not user:
+        # Claim legacy email row if present (pre-Supabase invite leftovers)
+        legacy = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
+        if legacy and legacy.id != user_id:
+            memberships = (
+                await db.execute(select(AgencyMember).where(AgencyMember.user_id == legacy.id))
+            ).scalars().all()
+            for membership in memberships:
+                membership.user_id = user_id
+            await db.delete(legacy)
+            await db.flush()
         user = User(
-            email=payload.email.lower(),
-            full_name=payload.full_name,
-            hashed_password=hash_password(payload.password),
+            id=user_id,
+            email=email,
+            full_name=payload.full_name.strip()[:255] or email.split("@")[0],
+            hashed_password=None,
         )
         db.add(user)
         await db.flush()
+    else:
+        if payload.full_name.strip():
+            user.full_name = payload.full_name.strip()[:255]
+
     existing = (
         await db.execute(
             select(AgencyMember).where(
@@ -557,14 +643,16 @@ async def invite_member(
     ).scalar_one_or_none()
     if existing:
         existing.is_active = True
-        existing.role = MemberRole(payload.role)
+        existing.role = role
+        existing.invited_email = email
         member = existing
     else:
-        try:
-            role = MemberRole(payload.role)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid role") from exc
-        member = AgencyMember(agency_id=ctx.agency.id, user_id=user.id, role=role, invited_email=payload.email)
+        member = AgencyMember(
+            agency_id=ctx.agency.id,
+            user_id=user.id,
+            role=role,
+            invited_email=email,
+        )
         db.add(member)
     await db.flush()
     await db.refresh(member, attribute_names=["user"])
