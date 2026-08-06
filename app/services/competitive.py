@@ -692,8 +692,10 @@ async def enrich_client_profile(
     competitor_scope: str = "local",
     competitor_country: str | None = None,
     competitor_count: int = 5,
+    competitor_mode: str = "add",
 ) -> dict:
     scope = "global" if str(competitor_scope).lower() == "global" else "local"
+    mode = "update" if str(competitor_mode).lower() == "update" else "add"
     count = max(1, min(10, int(competitor_count or 5)))
     country = _as_str(competitor_country).strip()
 
@@ -817,6 +819,28 @@ async def enrich_client_profile(
     await db.flush()
     await clarify_feature_descriptions(db, agency, client, feature_rows)
 
+    existing_early = (
+        await db.execute(select(Competitor).where(Competitor.client_id == client.id, Competitor.agency_id == agency.id))
+    ).scalars().all()
+    tracking_existing_early = [c for c in existing_early if c.is_tracking or c.is_pinned]
+    if mode == "update":
+        await db.flush()
+        return {
+            "features": len(feature_rows),
+            "competitors_added": 0,
+            "competitors_requested": count,
+            "competitor_scope": scope,
+            "competitor_country": country or None,
+            "competitors_kept_existing": len(tracking_existing_early),
+            "competitors_pruned_global": 0,
+            "competitor_mode": mode,
+            "goals": len(client.goals or []),
+            "industry": client.industry,
+            "niche": client.niche,
+            "market_area": market_area,
+            "business_model": business_model,
+        }
+
     if scope == "global":
         competitor_prompt = (
             f"Find exactly {count} REAL direct competitors for this company with GLOBAL / international reach. "
@@ -824,7 +848,7 @@ async def enrich_client_profile(
             f"Return JSON: {{competitors:[{'{'}name, website, why_relevant, threat_level, overlap_score, "
             "same_niche:true, market_overlap, is_global_platform:false{'}'}]}}. "
             "Hard rules:\n"
-            f"1) Return at most {count} competitors — quality over quantity.\n"
+            f"1) Return exactly {count} NEW competitors — not names in already_have.\n"
             "2) Prefer well-known international peers in the same category (similar product, similar buyer).\n"
             "3) EXCLUDE pure infrastructure hyperscalers used only as platforms "
             "(AWS/Azure/GCP as clouds, Dialogflow as a raw API) unless they are a true peer product.\n"
@@ -839,7 +863,7 @@ async def enrich_client_profile(
             f"Return JSON: {{competitors:[{'{'}name, website, why_relevant, threat_level, overlap_score, "
             "same_niche:true, market_overlap, is_global_platform:false{'}'}]}}. "
             "Hard rules:\n"
-            f"1) Return at most {count} competitors — quality over quantity.\n"
+            f"1) Return exactly {count} NEW competitors — not names in already_have.\n"
             f"2) Prefer local/regional peer companies operating in {focus}.\n"
             "3) EXCLUDE global hyperscalers and mega consultancies "
             "(Accenture, IBM, Microsoft, Google, Amazon/AWS, Oracle, SAP, Deloitte, PwC, EY, KPMG, Cognizant, Infosys, TCS, Wipro, OpenAI).\n"
@@ -862,6 +886,8 @@ async def enrich_client_profile(
                 "competitor_scope": scope,
                 "competitor_country": country or None,
                 "competitor_count": count,
+                "competitor_mode": "add",
+                "already_have": [_as_str(c.name) for c in tracking_existing_early],
                 "business_model": business_model,
                 "features": [f.name for f in feature_rows[:10]],
                 "site_excerpt": site_md[:2000],
@@ -963,15 +989,22 @@ async def enrich_client_profile(
             competitor.overlap_score = min(float(competitor.overlap_score or 0), 30)
             pruned_global += 1
 
-    # Fill remaining slots with AI discoveries only
-    ai_slots = max(0, count - len(protected_existing))
-    # Prefer names AI has not already listed as existing
+    # Add mode: find exactly `count` NEW rivals on top of previous ones.
+    ai_slots = count
     existing_names = {_as_str(c.name).lower() for c in protected_existing}
-    fresh_items = [
-        c for c in competitor_items
-        if isinstance(c, dict) and _as_str(c.get("name")).lower() not in existing_names
-    ]
-    deduped = fresh_items[:ai_slots]
+    fresh_items = []
+    seen_fresh: set[str] = set()
+    for c in competitor_items:
+        if not isinstance(c, dict):
+            continue
+        key = _as_str(c.get("name")).lower()
+        if not key or key in existing_names or key in seen_fresh:
+            continue
+        seen_fresh.add(key)
+        fresh_items.append(c)
+        if len(fresh_items) >= ai_slots:
+            break
+    deduped = fresh_items
 
     created_competitors = 0
     for item in deduped:
@@ -1018,6 +1051,7 @@ async def enrich_client_profile(
         "competitor_country": country or None,
         "competitors_kept_existing": len(protected_existing),
         "competitors_pruned_global": pruned_global,
+        "competitor_mode": mode,
         "goals": len(client.goals or []),
         "industry": client.industry,
         "niche": client.niche,
@@ -1035,8 +1069,10 @@ async def run_competitive_pack(
     competitor_scope: str = "local",
     competitor_country: str | None = None,
     competitor_count: int = 5,
+    competitor_mode: str = "add",
 ) -> dict:
     count = max(1, min(10, int(competitor_count or 5)))
+    mode = "update" if str(competitor_mode).lower() == "update" else "add"
     features = (
         await db.execute(
             select(ProductFeature).where(
@@ -1055,9 +1091,8 @@ async def run_competitive_pack(
         )
     ).scalars().all()
 
-    globalish = sum(1 for c in competitors if _is_global_megarival(c.name, c.website))
-    needs_refresh = (not features or not competitors) or (competitors and globalish >= max(2, len(competitors) // 2))
-    if needs_refresh:
+    # Standalone pack calls may still need an enrich when the client has no rivals yet.
+    if not features or not competitors:
         await enrich_client_profile(
             db,
             agency,
@@ -1065,6 +1100,7 @@ async def run_competitive_pack(
             competitor_scope=competitor_scope,
             competitor_country=competitor_country,
             competitor_count=count,
+            competitor_mode=mode if competitors else "add",
         )
         features = (
             await db.execute(
@@ -1084,15 +1120,17 @@ async def run_competitive_pack(
             )
         ).scalars().all()
 
-    # Honor requested rival count, but never drop pinned (manual) rivals
+    # update: refresh up to `count` existing rivals. add: keep all tracked rivals (new ones already appended in enrich).
     pinned = [c for c in competitors if c.is_pinned]
     others = sorted(
         [c for c in competitors if not c.is_pinned],
         key=lambda c: float(c.overlap_score or 0),
         reverse=True,
     )
-    remaining_slots = max(0, count - len(pinned))
-    competitors = pinned + others[:remaining_slots]
+    if mode == "update":
+        competitors = (pinned + others)[: max(count, len(pinned))]
+    else:
+        competitors = pinned + others
 
     if not features or not competitors:
         raise ValueError(
@@ -1827,6 +1865,7 @@ async def run_full_ai_pipeline(
     competitor_scope: str = "local",
     competitor_country: str | None = None,
     competitor_count: int = 5,
+    competitor_mode: str = "add",
 ) -> dict:
     job = TrackingJob(
         agency_id=agency.id,
@@ -1850,6 +1889,7 @@ async def run_full_ai_pipeline(
             competitor_scope=competitor_scope,
             competitor_country=competitor_country,
             competitor_count=competitor_count,
+            competitor_mode=competitor_mode,
         )
         pack = await run_competitive_pack(
             db,
@@ -1858,6 +1898,7 @@ async def run_full_ai_pipeline(
             competitor_scope=competitor_scope,
             competitor_country=competitor_country,
             competitor_count=competitor_count,
+            competitor_mode=competitor_mode,
         )
         radar = await run_client_intelligence(
             db, agency, client, competitor_country=competitor_country

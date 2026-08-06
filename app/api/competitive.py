@@ -335,6 +335,10 @@ class AutoRunRequest(BaseModel):
     competitor_scope: str = Field(default="local", description="global or local")
     competitor_country: str | None = Field(default=None, max_length=120)
     competitor_count: int = Field(default=5, ge=1, le=10)
+    competitor_mode: str = Field(
+        default="add",
+        description="update = refresh existing rivals; add = find N new rivals and keep previous ones",
+    )
 
     @field_validator("competitor_scope")
     @classmethod
@@ -351,6 +355,14 @@ class AutoRunRequest(BaseModel):
             return None
         cleaned = value.strip()
         return cleaned or None
+
+    @field_validator("competitor_mode")
+    @classmethod
+    def _mode(cls, value: str) -> str:
+        cleaned = (value or "add").strip().lower()
+        if cleaned not in {"add", "update"}:
+            raise ValueError("competitor_mode must be add or update")
+        return cleaned
 
 
 @router.post("/clients/{client_id}/auto-run")
@@ -391,7 +403,7 @@ async def auto_run(
         job_type="full_ai_pipeline",
         status=JobStatus.pending,
         detail=(
-            f"Queued AI pipeline ({options.competitor_scope}"
+            f"Queued AI pipeline ({options.competitor_mode}/{options.competitor_scope}"
             + (f" · {options.competitor_country}" if options.competitor_country else "")
             + f" · {options.competitor_count} rivals)"
         ),
@@ -400,6 +412,7 @@ async def auto_run(
             "competitor_scope": options.competitor_scope,
             "competitor_country": options.competitor_country,
             "competitor_count": options.competitor_count,
+            "competitor_mode": options.competitor_mode,
         },
     )
     db.add(job)
@@ -410,6 +423,7 @@ async def auto_run(
     scope = options.competitor_scope
     country = options.competitor_country
     count = options.competitor_count
+    mode = options.competitor_mode
     # Commit before background task so the row is visible to a new session
     await db.commit()
 
@@ -434,6 +448,7 @@ async def auto_run(
                     competitor_scope=scope,
                     competitor_country=country,
                     competitor_count=count,
+                    competitor_mode=mode,
                 )
                 tracked = await session.get(TrackingJob, job_id)
                 if tracked:
@@ -465,6 +480,7 @@ async def auto_run(
             "competitor_scope": scope,
             "competitor_country": country,
             "competitor_count": count,
+            "competitor_mode": mode,
         },
     )
 

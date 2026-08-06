@@ -23,6 +23,7 @@ async def action_run_intel(
     competitor_scope: str = "local",
     competitor_country: str | None = None,
     competitor_count: int = 5,
+    competitor_mode: str = "add",
 ) -> dict[str, Any]:
     return await run_full_ai_pipeline(
         db,
@@ -33,6 +34,7 @@ async def action_run_intel(
         competitor_scope=competitor_scope,
         competitor_country=competitor_country,
         competitor_count=competitor_count,
+        competitor_mode=competitor_mode,
     )
 
 
