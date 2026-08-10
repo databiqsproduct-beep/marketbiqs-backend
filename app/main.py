@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
-from app.api import agency, auth, billing, chat, clients, competitive, delivery, intelligence, integrations, reports, supabase_api, whitelabel
+from app.api import agency, auth, billing, chat, clients, competitive, delivery, helpdesk, intelligence, integrations, reports, supabase_api, whitelabel
 from app.config import get_settings
 from app.database import DATABASE_BACKEND, AsyncSessionLocal, init_db, ping_db
 from app.models import Agency, ClientBrand, Report
@@ -196,6 +196,7 @@ app.include_router(competitive.router, prefix="/api")
 app.include_router(intelligence.router, prefix="/api")
 app.include_router(reports.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
+app.include_router(helpdesk.router, prefix="/api")
 app.include_router(billing.router, prefix="/api")
 app.include_router(integrations.router, prefix="/api")
 app.include_router(delivery.router, prefix="/api")
