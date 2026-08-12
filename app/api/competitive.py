@@ -650,9 +650,9 @@ async def weekly_loop(
         else None,
         "tickets_ready": tickets_count,
         "next_actions": [
-            "Read the suggestions below — what rivals offer that this brand still lacks",
-            "Save the important ones to the build list so the team can act on them",
-            "Open a simple build plan (and send tasks to Jira if you use it)",
+            "Open Competitors — pick a rival and review the feature-by-feature comparison",
+            "Open Warnings — save important gaps to the build list, or mark done when handled",
+            "Open Build list — turn saved items into a simple step-by-step plan",
             "Write a short weekly summary you can share with the client",
         ],
     }

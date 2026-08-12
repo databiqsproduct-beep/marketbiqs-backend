@@ -281,7 +281,11 @@ async def dashboard(ctx: AuthContext = Depends(get_auth_context), db: AsyncSessi
             await db.execute(select(func.count()).select_from(GapReport).where(GapReport.client_id == client.id))
         ).scalar_one()
         alerts = (
-            await db.execute(select(func.count()).select_from(GoalAlert).where(GoalAlert.client_id == client.id))
+            await db.execute(
+                select(func.count())
+                .select_from(GoalAlert)
+                .where(GoalAlert.client_id == client.id, GoalAlert.acted_on.is_(False))
+            )
         ).scalar_one()
         wishlist = (
             await db.execute(

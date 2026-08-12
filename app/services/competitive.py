@@ -901,7 +901,9 @@ def _name_aligned_with_domain(name: str, website: str | None) -> bool:
     return any(t in host_core or host_core in t for t in tokens)
 
 
-# Curated fallbacks when SerpAPI is down — real commercial software houses only
+# Curated fallbacks when SerpAPI is down / thin — real commercial software houses only.
+# Keep this list wide for Pakistan: local markets have many peers; enrich prune must still
+# be able to refill up to competitor_count from these seeds.
 _LOCAL_SOFTWARE_SEEDS: dict[str, list[dict]] = {
     "pakistan": [
         {"name": "Systems Limited", "website": "https://www.systemsltd.com"},
@@ -916,6 +918,24 @@ _LOCAL_SOFTWARE_SEEDS: dict[str, list[dict]] = {
         {"name": "Tintash", "website": "https://www.tintash.com"},
         {"name": "Devsinc", "website": "https://www.devsinc.com"},
         {"name": "TekRevol", "website": "https://www.tekrevol.com"},
+        {"name": "Techlogix", "website": "https://www.techlogix.com"},
+        {"name": "LMKT", "website": "https://www.lmkt.com"},
+        {"name": "Nextbridge", "website": "https://www.nextbridge.com"},
+        {"name": "Ovex Technologies", "website": "https://www.ovextech.com"},
+        {"name": "NorthBay Solutions", "website": "https://www.northbaysolutions.com"},
+        {"name": "Gaditek", "website": "https://www.gaditek.com"},
+        {"name": "PureLogics", "website": "https://www.purelogics.net"},
+        {"name": "Avanza Solutions", "website": "https://www.avanzasolutions.com"},
+        {"name": "Tkxel", "website": "https://www.tkxel.com"},
+        {"name": "Sofizar", "website": "https://www.sofizar.com"},
+        {"name": "Ebryx", "website": "https://www.ebryx.com"},
+        {"name": "Creative Chaos", "website": "https://www.creativechaos.co"},
+        {"name": "Cubix", "website": "https://www.cubix.co"},
+        {"name": "Rolustech", "website": "https://www.rolustech.com"},
+        {"name": "Digitify", "website": "https://www.digitify.com"},
+        {"name": "Vizteck Solutions", "website": "https://www.vizteck.com"},
+        {"name": "DPL", "website": "https://www.dpl.dev"},
+        {"name": "Xavor", "website": "https://www.xavor.com"},
     ],
 }
 _GLOBAL_SOFTWARE_SEEDS: list[dict] = [
@@ -1747,12 +1767,13 @@ async def enrich_client_profile(
         if len(competitor_items) >= max(count, 4):
             break
 
-    # When SerpAPI is broken/empty, seed real software-house peers so intel still works
+    # Always top up local software-house pools from curated peers (Serp is often thin/unauthorized).
     client_blob = f"{client.industry} {client.niche} {business_model}".lower()
     is_software_peer_client = any(
         tok in client_blob for tok in ("software", "agency", "technology", "ai", "it ", "digital", "development")
     )
-    if is_software_peer_client and len(competitor_items) < max(2, count // 2):
+    seed_when_thin = len(competitor_items) < max(count, 5)
+    if is_software_peer_client and (seed_when_thin or (scope == "local" and local_focus)):
         already = already_have_names + [_as_str(c.get("name")) for c in competitor_items]
         if scope == "local" and local_focus:
             competitor_items.extend(
@@ -1760,10 +1781,10 @@ async def enrich_client_profile(
                     local_focus,
                     client.name,
                     already_have=already,
-                    limit=max(count * 2, 8),
+                    limit=max(count * 3, 15),
                 )
             )
-        else:
+        elif seed_when_thin:
             competitor_items.extend(
                 _seed_global_software_rivals(
                     client.name,
@@ -2327,6 +2348,84 @@ async def run_competitive_pack(
                 competitor.overlap_score = 70.0
             kept.insert(0, competitor)
             kept_ids.add(competitor.id)
+
+    # Local markets (e.g. Pakistan) have many real software houses — don't stop at 2–3
+    # just because AI/scrape prune was harsh. Backfill from curated peers up to requested count.
+    client_is_software_for_backfill = any(
+        tok in f"{_as_str(client.industry)} {_as_str(client.niche)} {_business_model_from_client(client)}".lower()
+        for tok in ("software", "agency", "it services", "development", "digital", "saas", "technology")
+    )
+    if (
+        client_is_software_for_backfill
+        and scope == "local"
+        and required_market
+        and len(kept) < count
+    ):
+        existing_all = (
+            await db.execute(
+                select(Competitor).where(
+                    Competitor.client_id == client.id,
+                    Competitor.agency_id == agency.id,
+                )
+            )
+        ).scalars().all()
+        by_name_existing = {_as_str(c.name).lower(): c for c in existing_all}
+        # Only block names already kept — pruned rivals may be re-enabled from seeds.
+        already_names = [_as_str(c.name) for c in kept]
+        seeds = _seed_local_software_rivals(
+            required_market,
+            client.name,
+            already_have=already_names,
+            limit=max(count * 3, 15),
+        )
+        for item in seeds:
+            if len(kept) >= count:
+                break
+            name = _as_str(item.get("name")).strip()
+            website = _normalize_website(_as_str(item.get("website")) or None)
+            if not name or not website:
+                continue
+            key = name.lower()
+            competitor = by_name_existing.get(key)
+            if competitor:
+                if competitor.id in kept_ids:
+                    continue
+                competitor.website = website or competitor.website
+                competitor.headquarters = competitor.headquarters or required_market
+                competitor.description = competitor.description or _as_str(item.get("why_relevant"))
+                competitor.why_dangerous = competitor.why_dangerous or _as_str(item.get("why_relevant"))
+                competitor.overlap_score = max(float(competitor.overlap_score or 0), 70.0)
+                competitor.threat_level = (
+                    "high" if competitor.threat_level == "low" else (competitor.threat_level or "high")
+                )
+                competitor.is_tracking = True
+            else:
+                competitor = Competitor(
+                    agency_id=agency.id,
+                    client_id=client.id,
+                    name=name,
+                    website=website,
+                    description=_as_str(item.get("why_relevant")) or None,
+                    why_dangerous=_as_str(item.get("why_relevant")) or None,
+                    headquarters=required_market,
+                    threat_level="high",
+                    overlap_score=72.0,
+                    is_tracking=True,
+                    feature_list=[],
+                )
+                db.add(competitor)
+                await db.flush()
+            kept.append(competitor)
+            kept_ids.add(competitor.id)
+            analyzed.append(competitor)
+        if len(kept) < count:
+            logger.warning(
+                "Local software backfill still short for client=%s market=%s kept=%s requested=%s",
+                client.id,
+                required_market,
+                len(kept),
+                count,
+            )
 
     if not kept and analyzed:
         # Prefer strongest overlaps that are not megacorp/noise domains.
