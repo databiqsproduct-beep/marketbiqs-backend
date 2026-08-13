@@ -83,6 +83,24 @@ async def connect_jira(
     return integration
 
 
+async def disconnect_jira(db: AsyncSession, agency_id: str) -> bool:
+    stmt = select(Integration).where(Integration.agency_id == agency_id, Integration.provider == "jira")
+    result = await db.execute(stmt)
+    integration = result.scalar_one_or_none()
+    if not integration:
+        return False
+    integration.is_connected = False
+    integration.encrypted_credentials = None
+    integration.config = {
+        **(integration.config or {}),
+        "base_url": None,
+        "email": None,
+        "project_key": None,
+    }
+    await db.flush()
+    return True
+
+
 async def create_jira_ticket(
     db: AsyncSession,
     agency_id: str,

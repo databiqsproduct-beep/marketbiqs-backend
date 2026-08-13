@@ -48,6 +48,12 @@ async def jira_connect(
     return {"connected": True, "project_key": integration.config.get("project_key")}
 
 
+@router.post("/jira/disconnect")
+async def jira_disconnect(ctx: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
+    ok = await jira_service.disconnect_jira(db, ctx.agency.id)
+    return {"connected": False, "disconnected": ok}
+
+
 @router.post("/clients/{client_id}/jira/tickets", response_model=JiraTicketOut)
 async def create_ticket(
     payload: JiraTicketCreate,

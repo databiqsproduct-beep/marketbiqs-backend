@@ -47,8 +47,16 @@ async def scheduled_ai_pipeline() -> None:
 async def scheduled_delivery_pipeline() -> None:
     """Send due client deliveries based on delivery_schedule_cron.
 
-    Runs often so cron minutes are not missed; quiet unless a delivery is actually sent.
+    Hard timeout so a stuck SMTP/Resend call cannot pin max_instances=1 forever
+    (that hung the API and made Create workspace time out).
     """
+    try:
+        await asyncio.wait_for(_run_scheduled_delivery_pipeline(), timeout=50)
+    except asyncio.TimeoutError:
+        logger.error("scheduled_delivery_pipeline timed out after 50s — releasing scheduler slot")
+
+
+async def _run_scheduled_delivery_pipeline() -> None:
     now = datetime.utcnow()
     sent = 0
     async with AsyncSessionLocal() as db:
@@ -79,10 +87,16 @@ async def scheduled_delivery_pipeline() -> None:
                 )
             ).scalar_one_or_none()
             try:
-                await action_deliver(db, agency, client, report=report, message=None)
+                await asyncio.wait_for(
+                    action_deliver(db, agency, client, report=report, message=None),
+                    timeout=25,
+                )
                 await db.commit()
                 sent += 1
                 logger.info("Scheduled delivery sent for client=%s agency=%s", client.id, agency.id)
+            except asyncio.TimeoutError:
+                logger.error("Scheduled delivery timed out for client %s", client.id)
+                await db.rollback()
             except Exception:
                 logger.exception("Scheduled delivery failed for client %s", client.id)
                 await db.rollback()
