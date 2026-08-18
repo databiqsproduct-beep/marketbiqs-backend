@@ -147,6 +147,43 @@ async def chat_completion_stream(
         yield text
 
 
+async def platform_chat_completion_stream(
+    system: str,
+    user: str,
+    temperature: float = 0.35,
+    history: list[dict[str, str]] | None = None,
+    *,
+    missing_key_message: str | None = None,
+) -> AsyncIterator[str]:
+    """Stream from the platform GROQ_API_KEY only (help desk / product support — ignores BYOK)."""
+    api_key = (settings.groq_api_key or "").strip()
+    client = _async_client(api_key)
+    if not client:
+        yield missing_key_message or _fallback_text(system, user)
+        return
+    try:
+        stream = await client.chat.completions.create(
+            model=CHAT_MODEL,
+            messages=_normalize_messages(system, user, history),
+            temperature=temperature,
+            stream=True,
+        )
+        produced = False
+        async for chunk in stream:
+            delta = chunk.choices[0].delta.content if chunk.choices else None
+            if delta:
+                produced = True
+                yield delta
+        if not produced:
+            yield "I could not generate a reply right now. Please try again in a moment."
+    except Exception as exc:
+        logger.exception("Platform Groq stream failed: %s", exc)
+        yield (
+            "Help desk hit a Groq error. Check that GROQ_API_KEY is valid, then try again. "
+            f"({type(exc).__name__})"
+        )
+
+
 def _extract_json_object(raw: str) -> dict[str, Any] | None:
     text = (raw or "").strip()
     if not text or is_fallback_text(text):
