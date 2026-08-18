@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
+from app.config import get_settings
 from app.deps import AuthContext, get_auth_context, get_current_user
 from app.models import Agency, AgencyMember, MemberRole, PlanType, User, WorkspaceMode
 from app.schemas import (
@@ -15,6 +16,7 @@ from app.schemas import (
 from app.security import slugify
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+settings = get_settings()
 
 
 def _agency_for_mode(name: str, slug: str, workspace_mode: str) -> Agency:
@@ -25,10 +27,20 @@ def _agency_for_mode(name: str, slug: str, workspace_mode: str) -> Agency:
         slug=slug,
         workspace_mode=mode,
         plan=plan,
-        included_clients=10 if mode == WorkspaceMode.agency else 1,
-        reports_quota=40 if mode == WorkspaceMode.agency else 10,
-        scrape_quota=5000 if mode == WorkspaceMode.agency else 500,
-        budget_remaining_cents=45000 if mode == WorkspaceMode.agency else 3000,
+        included_clients=settings.included_clients if mode == WorkspaceMode.agency else settings.creator_included_clients,
+        reports_quota=(
+            settings.included_reports_per_month
+            if mode == WorkspaceMode.agency
+            else settings.creator_included_reports_per_month
+        ),
+        scrape_quota=(
+            settings.included_scrape_units
+            if mode == WorkspaceMode.agency
+            else settings.creator_included_scrape_units
+        ),
+        budget_remaining_cents=(
+            settings.agency_base_price if mode == WorkspaceMode.agency else settings.creator_base_price
+        ),
     )
 
 

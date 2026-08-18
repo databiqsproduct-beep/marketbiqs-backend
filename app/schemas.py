@@ -302,12 +302,71 @@ class ByokOut(BaseModel):
     created_at: datetime
 
 
+class PlanCatalogOut(BaseModel):
+    id: str
+    name: str
+    price_cents: int
+    included_clients: int
+    included_reports: int
+    included_scrapes: int
+    checkout_ready: bool
+
+
+class PackCatalogOut(BaseModel):
+    name: str
+    price_cents: int
+    extra_clients: int
+    extra_reports: int
+    extra_scrapes: int
+    checkout_ready: bool
+
+
+class ScrapePackCatalogOut(BaseModel):
+    name: str
+    price_cents: int
+    units: int
+    options: list[int]
+    checkout_ready: bool
+
+
+class PaygCatalogOut(BaseModel):
+    name: str = "Agency PAYG"
+    checkout_ready: bool = False
+    client_cents: int
+    intel_run_cents: int
+    report_cents: int
+    scrape_unit_cents: int
+
+
+class UsageLineOut(BaseModel):
+    key: str
+    label: str
+    quantity: int
+    unit_cents: int
+    amount_cents: int
+
+
+class BillingCatalogOut(BaseModel):
+    plans: list[PlanCatalogOut]
+    pack: PackCatalogOut
+    scrape_pack: ScrapePackCatalogOut
+    payg: PaygCatalogOut | None = None
+
+
 class BudgetOut(BaseModel):
     plan: str
+    plan_name: str
     billing_status: str
+    cancel_at_period_end: bool = False
+    billing_period_start: datetime | None = None
+    billing_period_end: datetime | None = None
     base_price_cents: int
     client_pack_count: int
     client_pack_price_cents: int
+    scrape_pack_count: int = 0
+    scrape_pack_price_cents: int = 500
+    scrape_pack_units: int = 100
+    extra_scrape_units: int = 0
     included_clients: int
     max_clients: int
     active_clients: int
@@ -315,15 +374,43 @@ class BudgetOut(BaseModel):
     reports_quota: int
     scrape_units_used: int
     scrape_quota: int
+    included_scrape_units: int = 0
+    scrape_overage_lots: int = 0
+    intel_runs_used: int = 0
+    usage_lines: list[UsageLineOut] = Field(default_factory=list)
+    payg_rates: PaygCatalogOut | None = None
     budget_remaining_cents: int
     byok_discount_percent: int
+    list_price_cents: int = 0
     estimated_monthly_cents: int
+    amount_paid_cents: int = 0
+    upcoming_invoice_cents: int = 0
+    stripe_configured: bool
+    has_subscription: bool
+    billing_model: str = "plan"
+    payg_available: bool = False
+    catalog: BillingCatalogOut
 
 
 class CheckoutRequest(BaseModel):
-    add_client_packs: int = 0
+    add_client_packs: int = Field(default=0, ge=0, le=50)
+    add_scrape_units: int = Field(default=0, ge=0, le=20000)
+    billing_model: str = "plan"
+    request_id: str = Field(min_length=8, max_length=120)
     success_url: str | None = None
     cancel_url: str | None = None
+
+
+class PackUpdateRequest(BaseModel):
+    client_pack_count: int = Field(ge=0, le=50)
+
+
+class ScrapePackUpdateRequest(BaseModel):
+    scrape_units: int = Field(ge=0, le=20000)
+
+
+class PortalRequest(BaseModel):
+    return_url: str | None = None
 
 
 class JiraConnectRequest(BaseModel):

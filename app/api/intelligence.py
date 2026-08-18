@@ -17,8 +17,20 @@ async def run_intelligence(
     ctx: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    if ctx.agency.scrape_units_used >= ctx.agency.scrape_quota:
-        raise HTTPException(status_code=402, detail="Scrape quota exceeded. Upgrade packs or enable BYOK.")
+    from app.services.billing import is_payg
+
+    if not is_payg(ctx.agency) and ctx.agency.scrape_units_used >= ctx.agency.scrape_quota:
+        try:
+            from app.services.billing import sync_scrape_overage
+
+            await sync_scrape_overage(ctx.agency, used=(ctx.agency.scrape_units_used or 0) + 1)
+        except Exception:
+            pass
+        if ctx.agency.scrape_units_used >= ctx.agency.scrape_quota:
+            raise HTTPException(
+                status_code=402,
+                detail="Scrape quota exceeded. Extra scrape lots are billed automatically when the subscription is active.",
+            )
     job = await run_client_intelligence(db, ctx.agency, client)
     return {
         "job_id": job.id,

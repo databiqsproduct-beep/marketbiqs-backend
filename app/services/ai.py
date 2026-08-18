@@ -14,8 +14,28 @@ from app.security import decrypt_secret
 settings = get_settings()
 logger = logging.getLogger("marketbiqs.ai")
 
-CHAT_MODEL = "llama-3.3-70b-versatile"
+# Groq retired llama-3.3-70b-versatile on 2026-08-16.
+_DEFAULT_GROQ_MODELS = ("openai/gpt-oss-120b", "qwen/qwen3.6-27b")
 FALLBACK_PREFIX = "Competitive intelligence briefing prepared from available workspace data."
+
+
+def _chat_models() -> list[str]:
+    configured = (getattr(settings, "groq_model", None) or "").strip()
+    models: list[str] = []
+    if configured:
+        models.append(configured)
+    for model in _DEFAULT_GROQ_MODELS:
+        if model not in models:
+            models.append(model)
+    return models
+
+
+def _is_missing_model(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return "model_not_found" in text or "does not exist or you do not have access" in text
+
+
+CHAT_MODEL = _chat_models()[0]
 
 
 async def resolve_groq_key(db: AsyncSession, agency_id: str) -> str:
@@ -78,38 +98,50 @@ async def chat_completion(
         logger.warning("Groq key missing for agency=%s — using fallback text", agency_id)
         return _fallback_text(system, user)
     messages = _normalize_messages(system, user, history)
-    try:
-        kwargs: dict[str, Any] = {
-            "model": CHAT_MODEL,
-            "messages": messages,
-            "temperature": temperature,
-        }
-        if json_mode:
-            kwargs["response_format"] = {"type": "json_object"}
-        response = await client.chat.completions.create(**kwargs)
-        content = (response.choices[0].message.content or "").strip()
-        if not content:
-            logger.warning("Groq returned empty content for agency=%s", agency_id)
-            return _fallback_text(system, user)
-        return content
-    except Exception as exc:
-        # Retry once without json_mode if the API rejects response_format
-        if json_mode:
-            logger.warning("Groq json_mode failed for agency=%s (%s); retrying plain", agency_id, exc)
-            try:
-                response = await client.chat.completions.create(
-                    model=CHAT_MODEL,
-                    messages=messages,
-                    temperature=temperature,
-                )
-                content = (response.choices[0].message.content or "").strip()
-                if content:
-                    return content
-            except Exception as exc2:
-                logger.exception("Groq chat_completion failed for agency=%s: %s", agency_id, exc2)
+    last_exc: Exception | None = None
+    for model in _chat_models():
+        try:
+            kwargs: dict[str, Any] = {
+                "model": model,
+                "messages": messages,
+                "temperature": temperature,
+            }
+            if json_mode:
+                kwargs["response_format"] = {"type": "json_object"}
+            response = await client.chat.completions.create(**kwargs)
+            content = (response.choices[0].message.content or "").strip()
+            if content:
+                return content
+            logger.warning("Groq returned empty content for agency=%s model=%s", agency_id, model)
+        except Exception as exc:
+            last_exc = exc
+            if _is_missing_model(exc):
+                logger.warning("Groq model unavailable (%s); trying next", model)
+                continue
+            if json_mode:
+                logger.warning("Groq json_mode failed for agency=%s model=%s (%s); retrying plain", agency_id, model, exc)
+                try:
+                    response = await client.chat.completions.create(
+                        model=model,
+                        messages=messages,
+                        temperature=temperature,
+                    )
+                    content = (response.choices[0].message.content or "").strip()
+                    if content:
+                        return content
+                except Exception as exc2:
+                    last_exc = exc2
+                    if _is_missing_model(exc2):
+                        logger.warning("Groq model unavailable (%s); trying next", model)
+                        continue
+                    logger.exception("Groq chat_completion failed for agency=%s: %s", agency_id, exc2)
+                    return _fallback_text(system, user)
+            else:
+                logger.exception("Groq chat_completion failed for agency=%s: %s", agency_id, exc)
                 return _fallback_text(system, user)
-        logger.exception("Groq chat_completion failed for agency=%s: %s", agency_id, exc)
-        return _fallback_text(system, user)
+    if last_exc:
+        logger.exception("Groq chat_completion failed for agency=%s: %s", agency_id, last_exc)
+    return _fallback_text(system, user)
 
 
 async def chat_completion_stream(
@@ -128,7 +160,7 @@ async def chat_completion_stream(
         return
     try:
         stream = await client.chat.completions.create(
-            model=CHAT_MODEL,
+            model=_chat_models()[0],
             messages=_normalize_messages(system, user, history),
             temperature=temperature,
             stream=True,
@@ -163,7 +195,7 @@ async def platform_chat_completion_stream(
         return
     try:
         stream = await client.chat.completions.create(
-            model=CHAT_MODEL,
+            model=_chat_models()[0],
             messages=_normalize_messages(system, user, history),
             temperature=temperature,
             stream=True,

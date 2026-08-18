@@ -205,10 +205,18 @@ async def _ensure_pg_extensions() -> None:
 
 
 async def _apply_schema_patches() -> None:
-    """Widen/fix columns create_all will not alter on existing Postgres tables."""
-    if DATABASE_BACKEND != "postgres":
-        return
-    patches = [
+    """Apply additive patches that create_all cannot add to existing databases."""
+    common_patches = [
+        "ALTER TABLE agencies ADD COLUMN stripe_base_item_id VARCHAR(120)",
+        "ALTER TABLE agencies ADD COLUMN stripe_pack_item_id VARCHAR(120)",
+        "ALTER TABLE agencies ADD COLUMN stripe_scrape_item_id VARCHAR(120)",
+        "ALTER TABLE agencies ADD COLUMN scrape_pack_count INTEGER DEFAULT 0",
+        "ALTER TABLE agencies ADD COLUMN billing_model VARCHAR(20) DEFAULT 'plan'",
+        "ALTER TABLE agencies ADD COLUMN cancel_at_period_end BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE agencies ADD COLUMN billing_period_start TIMESTAMP",
+        "ALTER TABLE agencies ADD COLUMN billing_period_end TIMESTAMP",
+    ]
+    postgres_patches = [
         "ALTER TABLE goal_alerts ALTER COLUMN impact TYPE VARCHAR(255)",
         "ALTER TABLE goal_alerts ALTER COLUMN evidence_strength TYPE VARCHAR(40)",
         "ALTER TABLE feature_comparisons ALTER COLUMN evidence_strength TYPE VARCHAR(40)",
@@ -222,12 +230,14 @@ async def _apply_schema_patches() -> None:
         # Supabase Auth: passwords live in Auth; app users.hashed_password is optional
         "ALTER TABLE users ALTER COLUMN hashed_password DROP NOT NULL",
     ]
-    async with engine.begin() as conn:
-        for stmt in patches:
-            try:
+    for stmt in common_patches + (postgres_patches if DATABASE_BACKEND == "postgres" else []):
+        try:
+            # One transaction per patch: an expected duplicate-column error must
+            # not abort all later patches on Postgres.
+            async with engine.begin() as conn:
                 await conn.execute(text(stmt))
-            except Exception as exc:
-                logger.debug("Schema patch skipped (%s): %s", stmt[:60], exc)
+        except Exception as exc:
+            logger.debug("Schema patch skipped (%s): %s", stmt[:60], exc)
 
 
 async def init_db() -> None:

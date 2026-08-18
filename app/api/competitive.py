@@ -337,7 +337,7 @@ class AutoRunRequest(BaseModel):
     competitor_count: int = Field(default=5, ge=1, le=10)
     competitor_mode: str = Field(
         default="add",
-        description="update = refresh existing; add = find N new and keep previous; replace = clear auto rivals then find a fresh set",
+        description="update = refresh existing rivals; add = find N new rivals and keep previous ones",
     )
 
     @field_validator("competitor_scope")
@@ -360,8 +360,8 @@ class AutoRunRequest(BaseModel):
     @classmethod
     def _mode(cls, value: str) -> str:
         cleaned = (value or "add").strip().lower()
-        if cleaned not in {"add", "update", "replace"}:
-            raise ValueError("competitor_mode must be add, update, or replace")
+        if cleaned not in {"add", "update"}:
+            raise ValueError("competitor_mode must be add or update")
         return cleaned
 
 
@@ -392,10 +392,23 @@ async def auto_run(
         else:
             options = options.model_copy(update={"competitor_scope": "global"})
 
-    if ctx.agency.scrape_units_used >= ctx.agency.scrape_quota:
-        raise HTTPException(status_code=402, detail="Scrape quota exceeded. Purchase client packs.")
-    if ctx.agency.reports_used >= ctx.agency.reports_quota:
-        raise HTTPException(status_code=402, detail="Report quota exceeded. Purchase client packs.")
+    from app.services.billing import is_payg
+
+    if not is_payg(ctx.agency):
+        if ctx.agency.scrape_units_used >= ctx.agency.scrape_quota:
+            try:
+                from app.services.billing import sync_scrape_overage
+
+                await sync_scrape_overage(ctx.agency, used=(ctx.agency.scrape_units_used or 0) + 1)
+            except Exception:
+                pass
+            if ctx.agency.scrape_units_used >= ctx.agency.scrape_quota:
+                raise HTTPException(
+                    status_code=402,
+                    detail="Scrape quota exceeded. Purchase extra scrape units on Billing.",
+                )
+        if ctx.agency.reports_used >= ctx.agency.reports_quota:
+            raise HTTPException(status_code=402, detail="Report quota exceeded. Purchase client packs.")
 
     job = TrackingJob(
         agency_id=ctx.agency.id,
@@ -650,9 +663,9 @@ async def weekly_loop(
         else None,
         "tickets_ready": tickets_count,
         "next_actions": [
-            "Open Competitors — pick a rival and review the feature-by-feature comparison",
-            "Open Warnings — save important gaps to the build list, or mark done when handled",
-            "Open Build list — turn saved items into a simple step-by-step plan",
+            "Read the suggestions below — what rivals offer that this brand still lacks",
+            "Save the important ones to the build list so the team can act on them",
+            "Open a simple build plan (and send tasks to Jira if you use it)",
             "Write a short weekly summary you can share with the client",
         ],
     }

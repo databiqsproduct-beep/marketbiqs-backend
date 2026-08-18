@@ -62,8 +62,22 @@ async def track_usage(db: AsyncSession, agency_id: str, event_type: str, units: 
 
 async def ensure_scrape_quota(db: AsyncSession, agency_id: str) -> None:
     agency = await db.get(Agency, agency_id)
-    if agency and agency.scrape_units_used >= agency.scrape_quota:
-        raise ValueError("Scrape quota exceeded. Purchase client packs or raise scrape quota.")
+    if not agency:
+        return
+    from app.services.billing import is_payg
+
+    if is_payg(agency):
+        return
+    if agency.scrape_units_used < agency.scrape_quota:
+        return
+    try:
+        from app.services.billing import sync_scrape_overage
+
+        await sync_scrape_overage(agency, used=(agency.scrape_units_used or 0) + 1)
+    except Exception:
+        logger.warning("Could not auto-buy scrape overage for agency=%s", agency_id, exc_info=True)
+    if agency.scrape_units_used >= agency.scrape_quota:
+        raise ValueError("Scrape quota exceeded. Purchase extra scrape units on Billing.")
 
 
 async def scrape_website(db: AsyncSession, agency_id: str, url: str) -> dict[str, Any]:
@@ -100,6 +114,7 @@ async def serp_visibility(
     if not key:
         return {"query": query, "status": "skipped", "organic": []}
     try:
+        await ensure_scrape_quota(db, agency_id)
         params: dict[str, Any] = {"engine": "google", "q": query, "api_key": key, "num": 10}
         if location:
             params["location"] = location
@@ -154,6 +169,7 @@ async def run_apify_actor(
     if not token:
         return {"status": "skipped", "items": [], "note": "Missing Apify token"}
     try:
+        await ensure_scrape_quota(db, agency_id)
         client = ApifyClient(token)
         call_kwargs: dict[str, Any] = {
             "run_input": run_input,

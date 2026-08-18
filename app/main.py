@@ -20,6 +20,8 @@ from app.services.supabase_client import ensure_reports_bucket, ping_supabase, s
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("marketbiqs")
+# httpx logs full request URLs, which can include SerpAPI keys
+logging.getLogger("httpx").setLevel(logging.WARNING)
 # APScheduler otherwise floods Railway with "Running job … executed successfully" every minute
 logging.getLogger("apscheduler.executors.default").setLevel(logging.WARNING)
 logging.getLogger("apscheduler.scheduler").setLevel(logging.WARNING)
