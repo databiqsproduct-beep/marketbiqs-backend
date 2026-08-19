@@ -671,6 +671,78 @@ async def weekly_loop(
     }
 
 
+@router.get("/clients/{client_id}/workspace")
+async def client_workspace(
+    client: ClientBrand = Depends(get_tenant_client),
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    """One round-trip for every client tab: client, rivals, features, reports, radar."""
+    from app.api.intelligence import list_jobs, list_sentiment, list_snapshots, list_trends
+    from app.api.reports import list_reports
+    from app.schemas import ClientOut, CompetitorOut, ReportOut, SentimentOut, SnapshotOut, TrendOut
+
+    competitors = (
+        await db.execute(
+            select(Competitor)
+            .where(
+                Competitor.client_id == client.id,
+                Competitor.agency_id == ctx.agency.id,
+                Competitor.is_tracking.is_(True),
+            )
+            .order_by(Competitor.is_pinned.desc(), Competitor.overlap_score.desc())
+        )
+    ).scalars().all()
+    feature_rows = (
+        await db.execute(
+            select(ProductFeature)
+            .where(ProductFeature.client_id == client.id, ProductFeature.agency_id == ctx.agency.id)
+            .order_by(ProductFeature.created_at.desc())
+        )
+    ).scalars().all()
+    features = []
+    for row in feature_rows:
+        out = FeatureOut.model_validate(row)
+        if row.is_loved and not row.is_wishlisted:
+            out = out.model_copy(update={"is_wishlisted": True})
+        features.append(out)
+    wishlist = [row for row in features if row.is_wishlisted or row.is_loved]
+    weekly = await weekly_loop(client, ctx, db)
+    alerts = await list_alerts(client, ctx, db)
+    report_rows = await list_reports(client, ctx, db)
+    reports = [ReportOut.model_validate(row) for row in report_rows[:50]]
+    trends = [TrendOut.model_validate(row) for row in await list_trends(client, ctx, db)]
+    sentiment = [SentimentOut.model_validate(row) for row in await list_sentiment(client, ctx, db)]
+    snapshots = [SnapshotOut.model_validate(row) for row in await list_snapshots(client, ctx, db)]
+    jobs = await list_jobs(client, ctx, db)
+    first = competitors[0] if competitors else None
+    detail = await competitor_detail(first.id, client, ctx, db) if first else None
+    client_out = ClientOut.model_validate(client).model_copy(
+        update={
+            "rivals_count": len(competitors),
+            "features_count": len(features),
+            "reports_count": len(report_rows),
+            "tickets_count": weekly.get("tickets_ready") or 0,
+            "alerts_open": sum(1 for a in alerts if not getattr(a, "acted_on", False)),
+        }
+    )
+    return {
+        "client": client_out,
+        "competitors": [CompetitorOut.model_validate(row) for row in competitors],
+        "features": features,
+        "wishlist": wishlist,
+        "alerts": alerts,
+        "reports": reports,
+        "weekly": weekly,
+        "trends": trends,
+        "sentiment": sentiment,
+        "snapshots": snapshots,
+        "jobs": jobs,
+        "competitor_detail": detail,
+        "comparisons": (detail or {}).get("comparisons") or [],
+    }
+
+
 @router.get("/clients/{client_id}/comparisons", response_model=list[ComparisonOut])
 async def list_comparisons(
     client: ClientBrand = Depends(get_tenant_client),
