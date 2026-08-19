@@ -2935,6 +2935,14 @@ async def run_competitive_pack(
         competitors = pinned_final + others_final[:count]
     else:
         competitors = pinned_final + others_final
+    from app.services.billing import max_tracked_rivals
+
+    rival_cap = max_tracked_rivals(agency)
+    if rival_cap is not None and len(competitors) > rival_cap:
+        overflow = competitors[rival_cap:]
+        competitors = competitors[:rival_cap]
+        for extra in overflow:
+            extra.is_tracking = False
     if not competitors:
         raise ValueError("No competitors available for this client after enrichment.")
 

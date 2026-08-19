@@ -6,7 +6,7 @@ from app.database import get_db
 from app.deps import AuthContext, get_auth_context, get_tenant_client
 from app.models import ClientBrand, Competitor, FeatureTicket, GoalAlert, ProductFeature, Report
 from app.schemas import ClientCreate, ClientOut, ClientUpdate, CompetitorCreate, CompetitorOut
-from app.services.billing import ensure_client_capacity
+from app.services.billing import ensure_client_capacity, max_tracked_rivals
 from app.services.competitive import collapse_duplicate_competitors, _find_matching_competitor
 
 router = APIRouter(prefix="/clients", tags=["clients"])
@@ -153,6 +153,14 @@ async def add_competitor(
         )
     ).scalars().all()
     competitor = _find_matching_competitor(list(existing), data.get("name") or "", data.get("website"))
+    cap = max_tracked_rivals(ctx.agency)
+    tracking = sum(1 for row in existing if row.is_tracking)
+    enabling = not (competitor and competitor.is_tracking)
+    if cap is not None and enabling and tracking >= cap:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Individual plans track up to {cap} competitors. Remove one before adding another.",
+        )
     if competitor:
         competitor.website = data.get("website") or competitor.website
         competitor.is_tracking = True

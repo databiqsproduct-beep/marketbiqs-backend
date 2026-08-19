@@ -111,6 +111,11 @@ async def budget(ctx: AuthContext = Depends(get_auth_context), db: AsyncSession 
         except Exception:
             logger.warning("BYOK Stripe coupon sync failed for agency=%s", ctx.agency.id, exc_info=True)
     snapshot = compute_budget(ctx.agency, active, intel_runs_used=intel_runs)
+    if is_payg(ctx.agency):
+        usage = max(0, int(snapshot.estimated_monthly_cents or 0))
+        return snapshot.model_copy(
+            update={"amount_paid_cents": 0, "upcoming_invoice_cents": usage}
+        )
     spend = await load_stripe_spend(ctx.agency, estimated=snapshot.estimated_monthly_cents)
     upcoming = int(spend.get("upcoming_invoice_cents") or 0)
     if snapshot.byok_discount_percent and upcoming > snapshot.estimated_monthly_cents:

@@ -94,6 +94,7 @@ class Settings(BaseSettings):
     creator_included_clients: int = 1
     creator_included_reports_per_month: int = 10
     creator_included_scrape_units: int = 500
+    creator_max_tracked_competitors: int = 10
 
     encryption_key: str = "biqs-fernet-key-change-in-prod-32b!"
 

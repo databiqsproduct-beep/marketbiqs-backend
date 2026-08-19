@@ -85,3 +85,17 @@ async def download_pdf(
             "Cache-Control": "no-store",
         },
     )
+
+
+@router.delete("/reports/{report_id}")
+async def delete_report(
+    report_id: str,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    report = await db.get(Report, report_id)
+    if not report or report.agency_id != ctx.agency.id:
+        raise HTTPException(status_code=404, detail="Report not found")
+    await db.delete(report)
+    await db.flush()
+    return {"ok": True}

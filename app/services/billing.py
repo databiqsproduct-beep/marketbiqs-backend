@@ -55,6 +55,13 @@ def is_agency_workspace(agency: Agency) -> bool:
     return mode != "creator" and _plan_id(agency) != "creator"
 
 
+def max_tracked_rivals(agency: Agency) -> int | None:
+    """Individual workspaces cap stored rivals. Agency is per-run (1–10), no stored seat cap."""
+    if is_agency_workspace(agency):
+        return None
+    return max(1, int(settings.creator_max_tracked_competitors or 10))
+
+
 def is_payg(agency: Agency) -> bool:
     return (
         (agency.billing_model or "plan") == "payg"
@@ -82,6 +89,7 @@ def plan_values(plan_id: str) -> dict[str, Any]:
             "included_clients": settings.creator_included_clients,
             "included_reports": settings.creator_included_reports_per_month,
             "included_scrapes": settings.creator_included_scrape_units,
+            "included_rivals": settings.creator_max_tracked_competitors,
             "stripe_price_id": settings.stripe_individual_price_id,
         }
     return {
@@ -91,6 +99,7 @@ def plan_values(plan_id: str) -> dict[str, Any]:
         "included_clients": settings.included_clients,
         "included_reports": settings.included_reports_per_month,
         "included_scrapes": settings.included_scrape_units,
+        "included_rivals": 10,
         "stripe_price_id": settings.stripe_agency_price_id,
     }
 
@@ -108,6 +117,7 @@ def billing_catalog(plan_id: str | None = None) -> BillingCatalogOut:
                 included_clients=values["included_clients"],
                 included_reports=values["included_reports"],
                 included_scrapes=values["included_scrapes"],
+                included_rivals=values["included_rivals"],
                 checkout_ready=bool(settings.stripe_secret_key and values["stripe_price_id"]),
             )
         )
@@ -315,6 +325,7 @@ def compute_budget(agency: Agency, active_clients: int, *, intel_runs_used: int 
         reports_quota=agency.reports_quota,
         scrape_units_used=agency.scrape_units_used,
         scrape_quota=scrape_quota,
+        max_tracked_rivals=max_tracked_rivals(agency),
         included_scrape_units=0 if payg else included_scrapes,
         scrape_overage_lots=overage_lots,
         intel_runs_used=intel_runs,
@@ -417,7 +428,7 @@ async def sync_payg_usage_charges(
 
 
 async def migrate_payg_off_fixed_packs(agency: Agency) -> None:
-    """Existing $49 PAYG subs keep the cycle but stop charging client/scrape packs."""
+    """PAYG keeps the Stripe cycle but drops $49/$5 packs and leftover plan prices."""
     if not is_payg(agency) or not agency.stripe_subscription_id or not settings.stripe_secret_key:
         return
     stripe = _stripe()
@@ -429,39 +440,54 @@ async def migrate_payg_off_fixed_packs(agency: Agency) -> None:
         )
     except Exception:
         pass
-    if settings.stripe_payg_price_id:
-        try:
-            sub = await _call(
-                stripe.Subscription.retrieve,
-                agency.stripe_subscription_id,
-                expand=["items.data.price"],
+    try:
+        sub = await _call(
+            stripe.Subscription.retrieve,
+            agency.stripe_subscription_id,
+            expand=["items.data.price"],
+        )
+        apply_subscription(agency, sub)
+        item_rows = (_as_dict(_as_dict(sub).get("items")).get("data") or [])
+        drop_prices = {
+            settings.stripe_client_pack_price_id,
+            settings.stripe_scrape_pack_price_id,
+            settings.stripe_agency_price_id,
+            settings.stripe_individual_price_id,
+        }
+        drop_prices.discard("")
+        has_payg_price = False
+        for item in item_rows:
+            row = _as_dict(item)
+            price_id = _price_id(row)
+            if price_id == settings.stripe_payg_price_id:
+                has_payg_price = True
+                continue
+            if price_id in drop_prices and row.get("id"):
+                try:
+                    await _call(
+                        stripe.SubscriptionItem.delete,
+                        row["id"],
+                        proration_behavior="none",
+                    )
+                except Exception:
+                    pass
+        if settings.stripe_payg_price_id and not has_payg_price:
+            await _call(
+                stripe.SubscriptionItem.create,
+                subscription=agency.stripe_subscription_id,
+                price=settings.stripe_payg_price_id,
+                quantity=1,
+                proration_behavior="none",
+                idempotency_key=f"marketbiqs-payg-anchor-{agency.id}",
             )
-            apply_subscription(agency, sub)
-            item_rows = (_as_dict(_as_dict(sub).get("items")).get("data") or [])
-            has_payg_price = any(
-                _price_id(item) == settings.stripe_payg_price_id for item in item_rows
-            )
-            if not has_payg_price:
-                await _call(
-                    stripe.SubscriptionItem.create,
-                    subscription=agency.stripe_subscription_id,
-                    price=settings.stripe_payg_price_id,
-                    quantity=1,
-                    proration_behavior="none",
-                    idempotency_key=f"marketbiqs-payg-anchor-{agency.id}",
-                )
-        except Exception:
-            pass
-    if agency.client_pack_count:
-        try:
-            await update_pack_quantity(agency, 0)
-        except Exception:
-            pass
-    if agency.scrape_pack_count:
-        try:
-            await update_scrape_pack_quantity(agency, 0)
-        except Exception:
-            pass
+        await retrieve_and_apply_subscription(agency, agency.stripe_subscription_id)
+    except Exception:
+        pass
+    agency.client_pack_count = 0
+    agency.scrape_pack_count = 0
+    agency.stripe_pack_item_id = None
+    agency.stripe_scrape_item_id = None
+    sync_entitlements(agency)
 
 
 async def load_stripe_spend(agency: Agency, *, estimated: int | None = None) -> dict[str, int]:
@@ -880,7 +906,7 @@ async def _set_subscription_addon(
 
 async def update_scrape_pack_quantity(agency: Agency, scrape_units: int) -> Any:
     if is_payg(agency):
-        raise ValueError("PAYG bills scrape units from usage — extra scrape packs are only for the Agency plan.")
+        raise ValueError("PAYG bills scrape units from usage — extra scrape packs are for Individual and Agency subscriptions.")
     if not agency.stripe_subscription_id:
         raise ValueError("Subscribe to a plan before adding scrape units.")
     if not settings.stripe_scrape_pack_price_id:

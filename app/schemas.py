@@ -309,6 +309,7 @@ class PlanCatalogOut(BaseModel):
     included_clients: int
     included_reports: int
     included_scrapes: int
+    included_rivals: int = 10
     checkout_ready: bool
 
 
@@ -374,6 +375,7 @@ class BudgetOut(BaseModel):
     reports_quota: int
     scrape_units_used: int
     scrape_quota: int
+    max_tracked_rivals: int | None = None
     included_scrape_units: int = 0
     scrape_overage_lots: int = 0
     intel_runs_used: int = 0
