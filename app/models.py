@@ -69,9 +69,17 @@ class Agency(Base):
     plan: Mapped[PlanType] = mapped_column(Enum(PlanType), default=PlanType.agency)
     stripe_customer_id: Mapped[str | None] = mapped_column(String(120))
     stripe_subscription_id: Mapped[str | None] = mapped_column(String(120))
+    stripe_base_item_id: Mapped[str | None] = mapped_column(String(120))
+    stripe_pack_item_id: Mapped[str | None] = mapped_column(String(120))
+    stripe_scrape_item_id: Mapped[str | None] = mapped_column(String(120))
     billing_status: Mapped[str] = mapped_column(String(40), default="trialing")
+    billing_model: Mapped[str] = mapped_column(String(20), default="plan")
+    cancel_at_period_end: Mapped[bool] = mapped_column(Boolean, default=False)
+    billing_period_start: Mapped[datetime | None] = mapped_column(DateTime)
+    billing_period_end: Mapped[datetime | None] = mapped_column(DateTime)
     included_clients: Mapped[int] = mapped_column(Integer, default=10)
     client_pack_count: Mapped[int] = mapped_column(Integer, default=0)
+    scrape_pack_count: Mapped[int] = mapped_column(Integer, default=0)
     reports_used: Mapped[int] = mapped_column(Integer, default=0)
     scrape_units_used: Mapped[int] = mapped_column(Integer, default=0)
     reports_quota: Mapped[int] = mapped_column(Integer, default=40)
@@ -391,6 +399,19 @@ class UsageEvent(Base):
     event_type: Mapped[str] = mapped_column(String(60), nullable=False)
     units: Mapped[int] = mapped_column(Integer, default=1)
     meta: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class StripeEvent(Base):
+    """Processed Stripe events. event_id uniqueness makes webhook replay safe."""
+
+    __tablename__ = "stripe_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    event_id: Mapped[str] = mapped_column(String(120), unique=True, nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(120), nullable=False)
+    agency_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

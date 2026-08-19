@@ -33,7 +33,9 @@ async def create_report(
     ctx: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    if ctx.agency.reports_used >= ctx.agency.reports_quota:
+    from app.services.billing import is_payg
+
+    if not is_payg(ctx.agency) and ctx.agency.reports_used >= ctx.agency.reports_quota:
         raise HTTPException(status_code=402, detail="Report quota exceeded. Add usage packs.")
     report = await generate_client_report(
         db,
@@ -83,3 +85,17 @@ async def download_pdf(
             "Cache-Control": "no-store",
         },
     )
+
+
+@router.delete("/reports/{report_id}")
+async def delete_report(
+    report_id: str,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    report = await db.get(Report, report_id)
+    if not report or report.agency_id != ctx.agency.id:
+        raise HTTPException(status_code=404, detail="Report not found")
+    await db.delete(report)
+    await db.flush()
+    return {"ok": True}

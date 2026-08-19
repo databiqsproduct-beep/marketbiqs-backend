@@ -57,6 +57,7 @@ class Settings(BaseSettings):
         return bool((self.supabase_url or "").strip() and self.resolved_jwt_secret())
 
     groq_api_key: str = ""
+    groq_model: str = "openai/gpt-oss-120b"
     apify_key: str = ""
     serp_api: str = ""
     firecrawl_api_key: str = ""
@@ -65,7 +66,10 @@ class Settings(BaseSettings):
     stripe_publishable_key: str = ""
     stripe_webhook_secret: str = ""
     stripe_agency_price_id: str = ""
+    stripe_individual_price_id: str = ""
     stripe_client_pack_price_id: str = ""
+    stripe_scrape_pack_price_id: str = ""
+    stripe_payg_price_id: str = ""
 
     resend_api_key: str = ""
     email_from: str = "Biqs <reports@biqs.ai>"
@@ -76,10 +80,21 @@ class Settings(BaseSettings):
 
     scrape_interval_hours: int = 24
     agency_base_price: int = 45000
+    creator_base_price: int = 9900
     client_pack_price: int = 4900
+    scrape_pack_price: int = 500
+    scrape_pack_units: int = 100
+    payg_client_cents: int = 900
+    payg_intel_run_cents: int = 300
+    payg_report_cents: int = 200
+    payg_scrape_unit_cents: int = 5
     included_clients: int = 10
     included_reports_per_month: int = 40
     included_scrape_units: int = 5000
+    creator_included_clients: int = 1
+    creator_included_reports_per_month: int = 10
+    creator_included_scrape_units: int = 500
+    creator_max_tracked_competitors: int = 10
 
     encryption_key: str = "biqs-fernet-key-change-in-prod-32b!"
 

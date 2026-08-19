@@ -6,7 +6,8 @@ from app.database import get_db
 from app.deps import AuthContext, get_auth_context, get_tenant_client
 from app.models import ClientBrand, Competitor, FeatureTicket, GoalAlert, ProductFeature, Report
 from app.schemas import ClientCreate, ClientOut, ClientUpdate, CompetitorCreate, CompetitorOut
-from app.services.billing import ensure_client_capacity
+from app.services.billing import ensure_client_capacity, max_tracked_rivals
+from app.services.competitive import collapse_duplicate_competitors, _find_matching_competitor
 
 router = APIRouter(prefix="/clients", tags=["clients"])
 
@@ -48,15 +49,12 @@ async def _enrich_client(db: AsyncSession, client: ClientBrand) -> ClientOut:
 
 
 @router.get("", response_model=list[ClientOut])
-async def list_clients(
-    ctx: AuthContext = Depends(get_auth_context),
-    db: AsyncSession = Depends(get_db),
-    include_inactive: bool = False,
-):
-    stmt = select(ClientBrand).where(ClientBrand.agency_id == ctx.agency.id)
-    if not include_inactive:
-        stmt = stmt.where(ClientBrand.is_active.is_(True))
-    result = await db.execute(stmt.order_by(ClientBrand.created_at.desc()))
+async def list_clients(ctx: AuthContext = Depends(get_auth_context), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(ClientBrand)
+        .where(ClientBrand.agency_id == ctx.agency.id)
+        .order_by(ClientBrand.created_at.desc())
+    )
     clients = list(result.scalars().all())
     return [await _enrich_client(db, c) for c in clients]
 
@@ -88,8 +86,15 @@ async def get_client(client: ClientBrand = Depends(get_tenant_client), db: Async
 async def update_client(
     payload: ClientUpdate,
     client: ClientBrand = Depends(get_tenant_client),
+    ctx: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
+    activating = payload.is_active is True and not client.is_active
+    if activating:
+        try:
+            await ensure_client_capacity(db, ctx.agency)
+        except ValueError as exc:
+            raise HTTPException(status_code=402, detail=str(exc)) from exc
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(client, key, value)
     await db.flush()
@@ -99,6 +104,7 @@ async def update_client(
 @router.delete("/{client_id}")
 async def delete_client(
     client: ClientBrand = Depends(get_tenant_client),
+    ctx: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
     client.is_active = False
@@ -122,7 +128,12 @@ async def list_competitors(
     result = await db.execute(
         stmt.order_by(Competitor.is_pinned.desc(), Competitor.is_tracking.desc(), Competitor.overlap_score.desc())
     )
-    return list(result.scalars().all())
+    rows = list(result.scalars().all())
+    if not include_hidden:
+        collapse_duplicate_competitors(rows)
+        await db.flush()
+        rows = [row for row in rows if row.is_tracking]
+    return rows
 
 
 @router.post("/{client_id}/competitors", response_model=CompetitorOut)
@@ -133,6 +144,33 @@ async def add_competitor(
     ctx: AuthContext = Depends(get_auth_context),
 ):
     data = payload.model_dump()
+    existing = (
+        await db.execute(
+            select(Competitor).where(
+                Competitor.client_id == client.id,
+                Competitor.agency_id == ctx.agency.id,
+            )
+        )
+    ).scalars().all()
+    competitor = _find_matching_competitor(list(existing), data.get("name") or "", data.get("website"))
+    cap = max_tracked_rivals(ctx.agency)
+    tracking = sum(1 for row in existing if row.is_tracking)
+    enabling = not (competitor and competitor.is_tracking)
+    if cap is not None and enabling and tracking >= cap:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Individual plans track up to {cap} competitors. Remove one before adding another.",
+        )
+    if competitor:
+        competitor.website = data.get("website") or competitor.website
+        competitor.is_tracking = True
+        competitor.is_pinned = True
+        if (competitor.overlap_score or 0) < 75:
+            competitor.overlap_score = 75.0
+        competitor.threat_level = competitor.threat_level or "high"
+        await db.flush()
+        await db.refresh(competitor)
+        return competitor
     competitor = Competitor(
         agency_id=ctx.agency.id,
         client_id=client.id,

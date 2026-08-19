@@ -337,7 +337,7 @@ class AutoRunRequest(BaseModel):
     competitor_count: int = Field(default=5, ge=1, le=10)
     competitor_mode: str = Field(
         default="add",
-        description="update = refresh existing; add = find N new and keep previous; replace = clear auto rivals then find a fresh set",
+        description="update = refresh existing rivals; add = find N new rivals and keep previous ones",
     )
 
     @field_validator("competitor_scope")
@@ -360,8 +360,8 @@ class AutoRunRequest(BaseModel):
     @classmethod
     def _mode(cls, value: str) -> str:
         cleaned = (value or "add").strip().lower()
-        if cleaned not in {"add", "update", "replace"}:
-            raise ValueError("competitor_mode must be add, update, or replace")
+        if cleaned not in {"add", "update"}:
+            raise ValueError("competitor_mode must be add or update")
         return cleaned
 
 
@@ -392,10 +392,23 @@ async def auto_run(
         else:
             options = options.model_copy(update={"competitor_scope": "global"})
 
-    if ctx.agency.scrape_units_used >= ctx.agency.scrape_quota:
-        raise HTTPException(status_code=402, detail="Scrape quota exceeded. Purchase client packs.")
-    if ctx.agency.reports_used >= ctx.agency.reports_quota:
-        raise HTTPException(status_code=402, detail="Report quota exceeded. Purchase client packs.")
+    from app.services.billing import is_payg
+
+    if not is_payg(ctx.agency):
+        if ctx.agency.scrape_units_used >= ctx.agency.scrape_quota:
+            try:
+                from app.services.billing import sync_scrape_overage
+
+                await sync_scrape_overage(ctx.agency, used=(ctx.agency.scrape_units_used or 0) + 1)
+            except Exception:
+                pass
+            if ctx.agency.scrape_units_used >= ctx.agency.scrape_quota:
+                raise HTTPException(
+                    status_code=402,
+                    detail="Scrape quota exceeded. Purchase extra scrape units on Billing.",
+                )
+        if ctx.agency.reports_used >= ctx.agency.reports_quota:
+            raise HTTPException(status_code=402, detail="Report quota exceeded. Purchase client packs.")
 
     job = TrackingJob(
         agency_id=ctx.agency.id,
