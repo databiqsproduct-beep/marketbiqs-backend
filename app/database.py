@@ -145,11 +145,13 @@ if DATABASE_BACKEND == "postgres":
     # statement_cache_size=0 is required for Supabase transaction pooler (port 6543)
     _engine_kwargs.update(
         pool_pre_ping=True,
-        pool_size=5,
-        max_overflow=10,
+        pool_size=8,
+        max_overflow=12,
+        pool_timeout=8,
+        pool_recycle=180,
         connect_args={
-            "timeout": 10,
-            "command_timeout": 15,
+            "timeout": 8,
+            "command_timeout": 20,
             "statement_cache_size": 0,
             "ssl": "require",
         },

@@ -19,7 +19,7 @@ async def action_run_intel(
     client: ClientBrand,
     *,
     push_jira: bool = False,
-    generate_report: bool = True,
+    generate_report: bool = False,
     competitor_scope: str = "local",
     competitor_country: str | None = None,
     competitor_count: int = 5,

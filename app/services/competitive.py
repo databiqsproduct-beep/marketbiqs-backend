@@ -456,6 +456,8 @@ async def clarify_feature_descriptions(
     targets = owned if len(thin) >= max(1, len(owned) // 2) else thin
     if not targets:
         return owned
+    # Cap rewrite work — full-set clarifications stall the intel pipeline
+    targets = targets[:8]
 
     payload = [
         {"name": f.name, "category": f.category or "General", "description": f.description or ""}
@@ -512,6 +514,9 @@ _GLOBAL_DOMAIN_BLOCKLIST = {
     "openai.com", "anthropic.com", "salesforce.com", "adobe.com", "nvidia.com",
     "mckinsey.com", "bain.com", "bcg.com", "slalom.com", "thoughtworks.com",
     "manychat.com", "converse.ai", "inbenta.com",
+    # Non-PK food collisions
+    "shawarmajunction.com",  # US
+    "shawarma-house.com",  # parked lander
 }
 
 
@@ -584,6 +589,37 @@ def _rival_keys(name: str, website: str | None = None) -> set[str]:
     return keys
 
 
+def _is_self_rival(
+    client_name: str,
+    rival_name: str,
+    *,
+    website: str | None = None,
+    client_website: str | None = None,
+) -> bool:
+    """True when rival is the client itself (or a review/title about the client)."""
+    client = _as_str(client_name).strip()
+    rival = _as_str(rival_name).strip()
+    if not client or not rival:
+        return False
+    c_key = _rival_name_key(client)
+    r_key = _rival_name_key(rival)
+    if c_key and r_key:
+        if c_key == r_key:
+            return True
+        # "Sultan Shawarma" ⊂ "Sultan Shawarma: A Must"
+        if len(c_key) >= 6 and (c_key in r_key or (len(r_key) >= 6 and r_key in c_key)):
+            return True
+    c_tokens = [t for t in re.split(r"[^a-z0-9]+", client.lower()) if len(t) >= 3]
+    rival_l = rival.lower()
+    if c_tokens and all(tok in rival_l for tok in c_tokens):
+        return True
+    ch = _domain_of(client_website or "")
+    rh = _domain_of(website or "")
+    if ch and rh and ch == rh:
+        return True
+    return False
+
+
 def _blocked_rival_keys(names: list[str] | None, extra_name: str = "", websites: list[str] | None = None) -> set[str]:
     keys: set[str] = set()
     for value in names or []:
@@ -652,7 +688,85 @@ def _normalize_website(url: str | None) -> str | None:
     # Reject bare TLDs / IP-less junk hosts
     if host.count(".") < 1 or host.endswith("."):
         return None
+    # Strip ad/tracking query + fragments — UTMs (gclid, Saudi pmax, …) confuse geo profiling
+    raw = raw.split("#", 1)[0]
+    if "?" in raw:
+        base, _, qs = raw.partition("?")
+        keep: list[str] = []
+        for part in qs.split("&"):
+            key = part.split("=", 1)[0].lower()
+            if key in {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+                       "gclid", "gbraid", "wbraid", "fbclid", "msclkid", "device", "placement",
+                       "gad_source", "gad_campaignid"}:
+                continue
+            if part:
+                keep.append(part)
+        raw = f"{base}?{'&'.join(keep)}" if keep else base
     return raw.rstrip("/")
+
+
+# Home market for well-known brands when AI invents expansion markets (e.g. Cheezious → Riyadh)
+_KNOWN_BRAND_HOME_MARKET: dict[str, str] = {
+    "cheezious": "Pakistan",
+    "howdy": "Pakistan",
+    "optp": "Pakistan",
+    "ranchers": "Pakistan",
+    "johnny & jugnu": "Pakistan",
+    "johnny and jugnu": "Pakistan",
+    "sultan shawarma": "Pakistan",
+    "meet me in paris": "Pakistan",
+    "fine pizza": "Pakistan",
+    "broadway pizza": "Pakistan",
+    "pizza max": "Pakistan",
+    "california pizza": "Pakistan",
+    "systems limited": "Pakistan",
+    "systems ltd": "Pakistan",
+    "netsol": "Pakistan",
+    "netsol technologies": "Pakistan",
+}
+
+
+def _known_brand_home_market(name: str, website: str | None = None) -> str:
+    """Canonical home market for known brands — beats AI expansion-market guesses."""
+    n = _as_str(name).lower().strip()
+    if not n:
+        return ""
+    # Prefer longer keys first (systems limited before bare systems)
+    for brand, market in sorted(_KNOWN_BRAND_HOME_MARKET.items(), key=lambda kv: -len(kv[0])):
+        if brand == n or brand in n or n == brand:
+            return market
+    # Bare "systems" is ambiguous — only map when website looks like Systems Ltd PK
+    host = _domain_of(website or "")
+    if n in {"systems", "system"} and (
+        "systemsltd" in host or host.endswith(".pk") or host.endswith(".com.pk")
+    ):
+        return "Pakistan"
+    if host.endswith(".pk") or host.endswith(".com.pk"):
+        return "Pakistan"
+    return ""
+
+
+def _serp_location_for_market(market: str) -> str | None:
+    """SerpAPI `location` prefers a clean country/city string, not a free-form AI phrase."""
+    key = _normalize_country_key(market)
+    if not key:
+        raw = _as_str(market).strip()
+        return raw or None
+    # Prefer the canonical country name so gl + location stay aligned
+    pretty = {
+        "pakistan": "Pakistan",
+        "india": "India",
+        "singapore": "Singapore",
+        "uae": "United Arab Emirates",
+        "saudi arabia": "Saudi Arabia",
+        "united states": "United States",
+        "united kingdom": "United Kingdom",
+        "canada": "Canada",
+        "australia": "Australia",
+        "germany": "Germany",
+        "bangladesh": "Bangladesh",
+    }
+    return pretty.get(key, key.title())
 
 
 # Country / market vocabulary for local-scope geo filtering
@@ -681,6 +795,12 @@ _COUNTRY_ALIASES: dict[str, set[str]] = {
     "canada": {"canada", "canadian", "toronto", "vancouver", "montreal", "ontario", "mississauga", "british columbia"},
     "australia": {"australia", "australian", "sydney", "melbourne"},
     "germany": {"germany", "german", "berlin", "munich"},
+    "france": {
+        "france", "french", "lyon", "marseille", "bordeaux",
+        # "paris" intentionally omitted here — brand names like "Meet Me in Paris" / "Café de Paris"
+        # must not auto-flag France; handled by brand-geo hallucination checks instead.
+    },
+    "italy": {"italy", "italian", "rome", "milan", "milano", "florence"},
     "bangladesh": {"bangladesh", "bangladeshi", "dhaka"},
     "china": {"china", "chinese", "beijing", "shanghai", "shenzhen"},
 }
@@ -795,6 +915,212 @@ def _mentions_conflicting_country(blob: str, website: str | None, market: str) -
         if _host_matches_tlds(host, _COUNTRY_TLDS.get(key, set())):
             found.add(key)
     return bool(found)
+
+
+# Place words that often appear inside brand names but are NOT the client's market.
+# e.g. "Meet Me in Paris" (Lahore) must not pull Paris-France café rivals.
+_BRAND_PLACE_TO_COUNTRY: dict[str, str] = {
+    "paris": "france",
+    "french": "france",
+    "france": "france",
+    "london": "united kingdom",
+    "britain": "united kingdom",
+    "british": "united kingdom",
+    "rome": "italy",
+    "italian": "italy",
+    "italy": "italy",
+    "tokyo": "japan",
+    "japan": "japan",
+    "japanese": "japan",
+    "new york": "united states",
+    "nyc": "united states",
+    "america": "united states",
+    "dubai": "uae",
+    "istanbul": "turkey",
+    "turkish": "turkey",
+}
+
+# AI often invents these when a food brand name contains a foreign city (e.g. Paris).
+_FOREIGN_CAFE_HALLUCINATION_RE = re.compile(
+    r"\b("
+    r"le petit\b|le french\b|la maison\b|les petits?\b|"
+    r"paris\s+(cafe|bakery|bistro|restaurant)|"
+    r"cafe\s+paris\b|"
+    r"french\s+(cafe|bakery|bistro|restaurant)|"
+    r"petit paris|maison bakery|maison cafe"
+    r")\b",
+    re.I,
+)
+
+
+def _ascii_fold(text: str) -> str:
+    raw = _as_str(text).lower()
+    return (
+        raw.replace("café", "cafe")
+        .replace("café", "cafe")
+        .replace("é", "e")
+        .replace("è", "e")
+        .replace("ê", "e")
+        .replace("á", "a")
+        .replace("à", "a")
+        .replace("ü", "u")
+        .replace("ö", "o")
+        .replace("ï", "i")
+    )
+
+
+def _foreign_places_echoed_from_brand(client_name: str, market: str) -> set[str]:
+    """Foreign place tokens present in the client brand that are outside the selected market."""
+    market_key = _normalize_country_key(market)
+    name_l = _ascii_fold(client_name)
+    echoed: set[str] = set()
+    for token, country in _BRAND_PLACE_TO_COUNTRY.items():
+        if token in name_l and country != market_key:
+            echoed.add(token)
+    return echoed
+
+
+def _brand_geo_disclaimer(client_name: str, market: str) -> str:
+    echoed = _foreign_places_echoed_from_brand(client_name, market)
+    if not echoed:
+        return ""
+    places = ", ".join(sorted(echoed))
+    focus = _as_str(market).strip() or "the selected local market"
+    return (
+        f"CRITICAL BRAND-NAME GEO RULE: '{client_name}' is only a BRAND NAME — "
+        f"words like {places} inside the name do NOT mean the business is in that country. "
+        f"This client sells in {focus}. Do NOT return rivals in {places}/France/Europe "
+        f"or invent French/Parisian café names (Le Petit Paris, Paris Café, Le French Café, "
+        f"La Maison Bakery, etc.). Only real peer restaurants/cafés that operate in {focus}."
+    )
+
+
+def _looks_like_brand_geo_hallucination(
+    client_name: str,
+    rival_name: str,
+    market: str,
+    *,
+    website: str | None = None,
+    source: str = "",
+) -> bool:
+    """
+    Reject AI-invented foreign-theme rivals triggered by place words in the client brand
+    (e.g. Meet Me in Paris → fake Paris/French cafés when market is Pakistan).
+    """
+    market_key = _normalize_country_key(market)
+    rival_l = _ascii_fold(rival_name).strip()
+    if not rival_l:
+        return True
+    source_l = _as_str(source).lower()
+    host = _domain_of(website or "")
+    local_host = bool(host) and (
+        (
+            bool(market_key)
+            and _host_matches_tlds(host, _COUNTRY_TLDS.get(market_key, set()))
+        )
+        or (
+            market_key == "pakistan"
+            and any(a in host for a in ("pakistan", "lahore", "karachi"))
+        )
+        or host.endswith(".pk")
+    )
+
+    # Real Lahore brand that shares "Paris" with the client name — keep only with local proof
+    if "cafe de paris" in rival_l:
+        return not (source_l == "serp" or local_host)
+
+    # Classic French-café hallucination templates — always reject (local and global runs)
+    if _FOREIGN_CAFE_HALLUCINATION_RE.search(rival_l):
+        return True
+
+    if not market_key or market_key == "france":
+        return False
+
+    echoed = _foreign_places_echoed_from_brand(client_name, market)
+    if not echoed:
+        return False
+    # Rival name reuses the foreign place token from the brand (paris/french/…) without local proof
+    if any(tok in rival_l for tok in echoed):
+        if local_host and source_l in {"serp", "seed"}:
+            return False
+        if source_l == "serp" and local_host:
+            return False
+        if source_l != "serp":
+            return True
+        if not local_host:
+            return True
+    return False
+
+
+def _rival_fits_run_scope(
+    *,
+    name: str,
+    website: str | None,
+    headquarters: str | None = None,
+    description: str | None = None,
+    why: str | None = None,
+    scope: str,
+    market: str,
+    client_name: str,
+    is_pinned: bool = False,
+    strict: bool = True,
+) -> bool:
+    """Whether a rival should stay tracked for this intel run's local/global filter."""
+    if _is_generic_or_fake_rival_name(name):
+        return False
+    if _is_self_rival(client_name, name, website=website):
+        return False
+    if _looks_like_invented_food_domain(name, website):
+        return False
+    scope_l = "global" if str(scope).lower() == "global" else "local"
+    market_l = _as_str(market).strip()
+    blob = f"{name} {headquarters or ''} {description or ''} {why or ''} {website or ''}".lower()
+
+    # Wrong vertical / wrong-country food collisions (Cucina furniture, Andiamo Dubai, …)
+    if _looks_like_furniture_or_home_brand(name, description, why, website):
+        return False
+    if scope_l == "local" and _food_local_name_denied(name, market_l):
+        return False
+
+    # Brand-name place traps beat pin protection — otherwise fake "Paris Café" stays forever once pinned
+    if _looks_like_brand_geo_hallucination(
+        client_name,
+        name,
+        market_l or "global",
+        website=website,
+        source="ai",
+    ):
+        return False
+
+    # True manual pins survive other filters
+    if is_pinned:
+        return True
+
+    if scope_l == "global":
+        if _is_global_megarival(name, website):
+            return False
+        if website and _is_serp_noise_domain(website):
+            return False
+        return True
+
+    if not market_l:
+        return False
+    if _mentions_conflicting_country(blob, website, market_l):
+        return False
+    hq_key = _normalize_country_key(headquarters or "")
+    market_key = _normalize_country_key(market_l)
+    if hq_key and market_key and hq_key != market_key:
+        return False
+    if not strict:
+        # Pre-enrich: only drop clear mismatches; thin local peers may still prove out
+        return True
+    if _mentions_target_market(blob, website, market_l):
+        return True
+    if _is_curated_seed_rival(name, market_l, kind="food") or _is_curated_seed_rival(
+        name, market_l, kind="software"
+    ):
+        return True
+    return False
 
 
 def _serp_gl_for_market(market: str) -> str | None:
@@ -927,6 +1253,20 @@ _KNOWN_QSR_BRANDS = (
     "howdy",
     "optp",
     "ranchers",
+    "johnny and jugnu",
+    "johnny & jugnu",
+    "jugnu",
+    "mad burger",
+    "mad",
+    "sultan shawarma",
+    "shawarma stop",
+    "arabic shawarma",
+    "pita",
+    "heypita",
+    "monty shawarma",
+    "rizwan pocket shawarma",
+    "pocket shawarma",
+    "meet me in paris",
     "pizza hut",
     "domino",
     "papa john",
@@ -938,9 +1278,102 @@ _KNOWN_QSR_BRANDS = (
     "mcdonald",
     "kfc",
 )
+
+# Food peer tiers: category match alone is not enough — scale/format must align.
+FoodTier = str  # local_specialty | national_chain | global_franchise
+_FOOD_TIER_LOCAL = "local_specialty"
+_FOOD_TIER_NATIONAL = "national_chain"
+_FOOD_TIER_GLOBAL = "global_franchise"
+
+_LOCAL_SPECIALTY_TOKENS = (
+    "shawarma",
+    "shwarma",
+    "doner",
+    "kebab",
+    "kabab",
+    "bakery",
+    "patisserie",
+    "pastry",
+    "dessert",
+    "cake shop",
+    "cafe",
+    "café",
+    "coffee shop",
+    "cloud kitchen",
+    "ghost kitchen",
+    "street food",
+    "food truck",
+    "juice bar",
+    "smoothie",
+    "ice cream parlor",
+    "meet me in paris",
+    "fine pizza",
+    "gourmet pizza",
+    "johnny and jugnu",
+    "johnny & jugnu",
+    "jugnu",
+    "sultan shawarma",
+)
+
+_NATIONAL_CHAIN_TOKENS = (
+    "cheezious",
+    "howdy",
+    "optp",
+    "ranchers",
+    "broadway pizza",
+    "california pizza",
+    "pizza max",
+    "burger lab",
+    "food chain",
+    "restaurant chain",
+    "multi-city",
+    "nationwide",
+)
+
+_GLOBAL_FOOD_FRANCHISE_NAMES = (
+    "pizza hut",
+    "domino",
+    "dominos",
+    "papa john",
+    "papajohn",
+    "kfc",
+    "kentucky fried",
+    "mcdonald",
+    "mcdonalds",
+    "hardee",
+    "hardees",
+    "burger king",
+    "subway",
+    "starbucks",
+    "tim hortons",
+    "wendy",
+    "popeyes",
+    "taco bell",
+    "dunkin",
+)
+
+_GLOBAL_FOOD_FRANCHISE_DOMAINS = (
+    "pizzahut.com",
+    "pizzahut.com.pk",
+    "dominos.com",
+    "dominos.com.pk",
+    "papajohns.com",
+    "papajohns.com.pk",
+    "kfc.com",
+    "kfcpakistan.com",
+    "mcdonalds.com",
+    "mcdonalds.com.pk",
+    "hardees.com",
+    "hardees.com.pk",
+    "bk.com",
+    "burgerking.com",
+    "subway.com",
+    "starbucks.com",
+)
 _SHORT_REAL_BRANDS = {
     "kfc",
     "optp",
+    "mad",
     "dpl",
     "n-ix",
     "nix",
@@ -968,6 +1401,382 @@ def _looks_like_food_client(*parts: object) -> bool:
     if "food_qsr" in _detect_verticals(blob):
         return True
     return any(tok in blob for tok in _FOOD_PEER_TOKENS)
+
+
+def _is_global_food_franchise(name: str, website: str | None = None) -> bool:
+    """Pizza Hut / Domino's / KFC-scale franchises — not peers for indie local food brands."""
+    n = _as_str(name).strip().lower()
+    if n:
+        compact = re.sub(r"[^a-z0-9]+", "", n)
+        for blocked in _GLOBAL_FOOD_FRANCHISE_NAMES:
+            blocked_c = re.sub(r"[^a-z0-9]+", "", blocked)
+            if blocked in n or (blocked_c and blocked_c in compact):
+                return True
+    host = _domain_of(website or "")
+    if host:
+        for blocked in _GLOBAL_FOOD_FRANCHISE_DOMAINS:
+            if host == blocked or host.endswith("." + blocked):
+                return True
+    return False
+
+
+def _food_tier_from_blob(*parts: object) -> FoodTier:
+    """
+    Infer food brand scale/format.
+    local_specialty = shawarma / bakery / cafe / indie QSR
+    national_chain = strong multi-city local chains
+    global_franchise = Pizza Hut / KFC / McDonald's class
+    """
+    blob = _context_blob(*parts)
+    if not blob:
+        return _FOOD_TIER_LOCAL
+    # Prefer name/industry/niche over long website copy (sites often mention giants as comps).
+    identity = blob[:420]
+    if any(tok in identity for tok in _GLOBAL_FOOD_FRANCHISE_NAMES):
+        return _FOOD_TIER_GLOBAL
+    # Named national chains first (Cheezious etc. can contain "pizza" without being global)
+    if any(tok in identity for tok in _NATIONAL_CHAIN_TOKENS):
+        return _FOOD_TIER_NATIONAL
+    if any(tok in identity for tok in _LOCAL_SPECIALTY_TOKENS):
+        return _FOOD_TIER_LOCAL
+    # Unknown pizza/burger brand → local specialty, NOT national (avoids Fine Pizza ≈ Pizza Hut)
+    if any(tok in identity for tok in ("pizza", "burger", "fried chicken", "qsr", "fast food", "fast-food")):
+        return _FOOD_TIER_LOCAL
+    return _FOOD_TIER_LOCAL
+
+
+def _food_tier_compatible(client_tier: FoodTier, rival_tier: FoodTier) -> bool:
+    if client_tier == _FOOD_TIER_GLOBAL:
+        return True
+    if client_tier == _FOOD_TIER_NATIONAL:
+        # National PK chains peer with national/local — not Pizza Hut / KFC global franchises
+        return rival_tier in {_FOOD_TIER_NATIONAL, _FOOD_TIER_LOCAL}
+    # local_specialty: never seed/keep global franchises
+    return rival_tier in {_FOOD_TIER_LOCAL, _FOOD_TIER_NATIONAL}
+
+
+def _food_tier_overlap_bonus(client_tier: FoodTier, rival_tier: FoodTier) -> float:
+    if client_tier == rival_tier:
+        return 10.0
+    if client_tier == _FOOD_TIER_LOCAL and rival_tier == _FOOD_TIER_NATIONAL:
+        return -4.0
+    if client_tier == _FOOD_TIER_NATIONAL and rival_tier == _FOOD_TIER_GLOBAL:
+        return -6.0
+    if client_tier == _FOOD_TIER_LOCAL and rival_tier == _FOOD_TIER_GLOBAL:
+        return -40.0
+    return 0.0
+
+
+# Menu/format peer matching — STRICT categories (restaurant ≠ bakery ≠ cafe ≠ burger)
+FoodFormat = str  # restaurant|cafe|bakery|burger|pizza|asian|shawarma|general
+_FOOD_FORMAT_RESTAURANT = "restaurant"
+_FOOD_FORMAT_CAFE = "cafe"
+_FOOD_FORMAT_BAKERY = "bakery"
+_FOOD_FORMAT_BURGER = "burger"
+_FOOD_FORMAT_PIZZA = "pizza"
+_FOOD_FORMAT_ASIAN = "asian"
+_FOOD_FORMAT_SHAWARMA = "shawarma"
+_FOOD_FORMAT_GENERAL = "general"
+
+# Hard rejects for food clients — wrong industry or wrong-country "locals"
+_FURNITURE_HOME_TOKENS = (
+    "furniture", "wardrobe", "wardrobes", "kitchen cabinet", "kitchen cabinets",
+    "home cucine", "interior design", "sofa", "mattress", "furnishings",
+)
+# Market → rival name keys that must never appear as local food peers
+_FOOD_LOCAL_NAME_DENY: dict[str, set[str]] = {
+    "pakistan": {
+        "andiamo",  # Grand Hyatt Dubai Italian — not Pakistan
+        "cucina",  # usually kitchen/furniture SERP collision in PK
+        "shawarmajunction",  # US chain site, not PK peer
+        "shawarmahouse",  # parked / non-PK lander domains
+    },
+}
+
+
+def _rival_name_key(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", _as_str(name).lower())
+
+
+def _looks_like_furniture_or_home_brand(name: str, *extra: object) -> bool:
+    """Bare 'Cucina' / furniture retailers are not restaurant peers."""
+    key = _rival_name_key(name)
+    blob = _context_blob(name, *extra)
+    if key in {"cucina", "homecucine", "minicucine"}:
+        return True
+    if any(tok in blob for tok in _FURNITURE_HOME_TOKENS):
+        # Allow real restaurants that mention "interior" once in marketing copy only if
+        # they also look clearly like food venues.
+        if any(tok in blob for tok in ("restaurant", "cafe", "café", "dining", "menu", "brunch")):
+            return False
+        return True
+    return False
+
+
+def _food_local_name_denied(name: str, market: str | None) -> bool:
+    market_key = _normalize_country_key(market or "")
+    deny = _FOOD_LOCAL_NAME_DENY.get(market_key) or set()
+    if not deny:
+        return False
+    key = _rival_name_key(name)
+    compact = re.sub(r"\s+", " ", _as_str(name).lower()).strip()
+    return key in deny or compact in deny or any(d in compact for d in deny)
+
+
+def _food_format_from_blob(*parts: object) -> FoodFormat:
+    blob = _context_blob(*parts)
+    if not blob:
+        return _FOOD_FORMAT_GENERAL
+    compact = re.sub(r"[^a-z0-9]+", " ", blob).strip()
+    first = compact.split(" ")[0] if compact else ""
+
+    # Known brands by category (before weak tokens)
+    if first in {"mad", "jugnu"} or ("johnny" in compact and "jugnu" in compact):
+        return _FOOD_FORMAT_BURGER
+    if first in {"ginsoy", "ginyaki", "xinyaki"}:
+        return _FOOD_FORMAT_ASIAN
+    if "khan baba" in compact or compact.startswith("khanbaba"):
+        return _FOOD_FORMAT_RESTAURANT
+    if any(tok in compact for tok in ("layers", "butlers")) or "bakeshop" in compact:
+        return _FOOD_FORMAT_BAKERY
+    if any(tok in compact for tok in ("espresso lab", "gloria jean", "second cup")):
+        return _FOOD_FORMAT_CAFE
+    if "meet me in paris" in compact or first == "meet":
+        return _FOOD_FORMAT_RESTAURANT
+    if (
+        first in {"pita", "heypita"}
+        or "shawarma stop" in compact
+        or "arabic shawarma" in compact
+        or "sultan shawarma" in compact
+    ):
+        return _FOOD_FORMAT_SHAWARMA
+
+    if any(tok in blob for tok in ("shawarma", "shwarma", "doner", "kebab", "kabab")):
+        # Desi BBQ / karahi houses sometimes mention kebab — not shawarma shops
+        if any(
+            tok in blob
+            for tok in ("karahi", "qeema", "tandoor", "desi ghee", "khan baba", "bbq restaurant", "barbeque")
+        ) and "shawarma" not in blob and "shwarma" not in blob:
+            return _FOOD_FORMAT_RESTAURANT
+        return _FOOD_FORMAT_SHAWARMA
+    if any(tok in blob for tok in ("karahi", "qeema naan", "desi restaurant", "pakistani cuisine", "tawa piece")):
+        return _FOOD_FORMAT_RESTAURANT
+    if any(
+        tok in blob
+        for tok in (
+            "johnny & jugnu", "johnny and jugnu", "burger lab", "mad burger", "smash burger",
+            "burger",
+        )
+    ):
+        return _FOOD_FORMAT_BURGER
+    if any(tok in blob for tok in ("pizza", "domino", "pizza hut", "broadway pizza", "cheezious")):
+        return _FOOD_FORMAT_PIZZA
+    if any(
+        tok in blob
+        for tok in (
+            "ginyaki", "ginsoy", "xinyaki", "chinese", "oriental", "asian", "sushi",
+            "noodles", "dumpling", "thai", "japanese",
+        )
+    ):
+        return _FOOD_FORMAT_ASIAN
+    # Cake shop / bakery — NOT a restaurant peer
+    if any(
+        tok in blob
+        for tok in (
+            "bakery", "bakeshop", "patisserie", "pastry", "dessert shop", "cake shop",
+            "cakes", "chocolate shop", "confection",
+        )
+    ):
+        return _FOOD_FORMAT_BAKERY
+    # Coffee-led cafe (not full restaurant dining)
+    if any(
+        tok in blob
+        for tok in (
+            "coffee shop", "coffeehouse", "espresso bar", "gloria jean", "second cup",
+            "espresso lab",
+        )
+    ) and not any(tok in blob for tok in ("restaurant", "dine-in", "dining", "crepe", "entrée", "entree")):
+        return _FOOD_FORMAT_CAFE
+    # Full restaurant / casual dining / concept restaurants
+    if any(
+        tok in blob
+        for tok in (
+            "restaurant", "restaurants", "casual dining", "fine dining", "dine-in", "dining",
+            "crepe", "crêpe", "baguette sandwich", "croque", "french street", "french casual",
+            "french restaurant", "bistro", "brasserie", "eatery", "kitchen",
+            "meet me in paris", "salt'n pepper", "salt n pepper", "arcadian",
+        )
+    ):
+        return _FOOD_FORMAT_RESTAURANT
+    if any(tok in blob for tok in ("cafe", "café", "coffee", "brunch")):
+        # Bare "cafe" without restaurant cues → cafe; with paris/crepe already caught above
+        return _FOOD_FORMAT_CAFE
+    if "paris" in blob and not any(tok in blob for tok in ("pizza", "burger", "software", "cake", "bakery")):
+        return _FOOD_FORMAT_RESTAURANT
+    return _FOOD_FORMAT_GENERAL
+
+
+def _food_format_compatible(client_fmt: FoodFormat, rival_fmt: FoodFormat) -> bool:
+    """Same food category only — restaurant peers must be restaurants, not cake shops."""
+    if not client_fmt or client_fmt == _FOOD_FORMAT_GENERAL:
+        return True
+    if not rival_fmt or rival_fmt == _FOOD_FORMAT_GENERAL:
+        # Unknown rival category: do not treat as a match for strict client categories
+        return False
+    return client_fmt == rival_fmt
+
+
+def _food_rival_peer_hint(*parts: object) -> str:
+    """Human label for empty-rival errors — match the client's actual food format."""
+    fmt = _food_format_from_blob(*parts)
+    return {
+        _FOOD_FORMAT_SHAWARMA: "shawarma rivals",
+        _FOOD_FORMAT_PIZZA: "pizza rivals",
+        _FOOD_FORMAT_BURGER: "burger rivals",
+        _FOOD_FORMAT_BAKERY: "bakery rivals",
+        _FOOD_FORMAT_CAFE: "cafe rivals",
+        _FOOD_FORMAT_ASIAN: "Asian restaurant rivals",
+        _FOOD_FORMAT_RESTAURANT: "restaurant rivals",
+    }.get(fmt, "restaurant / cafe / bakery rivals")
+
+
+def _food_format_overlap_bonus(client_fmt: FoodFormat, rival_fmt: FoodFormat) -> float:
+    if client_fmt == rival_fmt and client_fmt != _FOOD_FORMAT_GENERAL:
+        return 16.0
+    if (
+        client_fmt != _FOOD_FORMAT_GENERAL
+        and rival_fmt != _FOOD_FORMAT_GENERAL
+        and client_fmt != rival_fmt
+    ):
+        return -40.0
+    return 0.0
+
+
+# Universal peer scale for EVERY client (food, software, retail, future niches).
+# Category match alone is not enough — rivals must be comparable in size/position.
+PeerScale = str  # boutique | mid_market | enterprise
+_PEER_BOUTIQUE = "boutique"
+_PEER_MID = "mid_market"
+_PEER_ENTERPRISE = "enterprise"
+
+_BOUTIQUE_SCALE_TOKENS = (
+    "boutique",
+    "studio",
+    "freelance",
+    "freelancer",
+    "indie",
+    "startup",
+    "small business",
+    "small agency",
+    "local shop",
+    "family owned",
+    "family-owned",
+    "independent",
+    "cloud kitchen",
+    "ghost kitchen",
+    "single outlet",
+    "home based",
+    "home-based",
+)
+
+_SOFTWARE_LARGE_NATIONAL = (
+    "systems limited",
+    "netsol",
+    "10pearls",
+    "arbisoft",
+    "confiz",
+    "folio3",
+    "venturedive",
+    "techlogix",
+)
+
+
+def _peer_scale_from_blob(*parts: object, name: str = "", website: str | None = None) -> PeerScale:
+    """
+    Infer comparable market position for any client/rival.
+    Used for food, software, and future verticals so discovery stays peer-level.
+    """
+    blob = _context_blob(*parts)
+    identity = blob[:420] if blob else ""
+    nm = _as_str(name) or identity.split(" ")[0] if identity else ""
+
+    if _is_global_megarival(nm or identity[:80], website) or _is_global_food_franchise(nm or identity[:80], website):
+        return _PEER_ENTERPRISE
+
+    if _looks_like_food_client(blob or identity):
+        food_tier = _food_tier_from_blob(*parts)
+        if food_tier == _FOOD_TIER_GLOBAL:
+            return _PEER_ENTERPRISE
+        if food_tier == _FOOD_TIER_NATIONAL:
+            return _PEER_MID
+        return _PEER_BOUTIQUE
+
+    if any(tok in identity for tok in _BOUTIQUE_SCALE_TOKENS):
+        return _PEER_BOUTIQUE
+
+    if _looks_like_software_peer_client(blob or identity):
+        if any(tok in identity for tok in _SOFTWARE_LARGE_NATIONAL):
+            return _PEER_MID
+        if any(tok in identity for tok in ("consultancy", "consulting firm", "enterprise software", "fortune 500")):
+            return _PEER_ENTERPRISE
+        return _PEER_MID
+
+    # Generic future niches (retail, education, clinics, etc.)
+    if any(tok in identity for tok in ("global brand", "multinational", "fortune 500", "worldwide chain")):
+        return _PEER_ENTERPRISE
+    if any(tok in identity for tok in _BOUTIQUE_SCALE_TOKENS) or any(
+        tok in identity for tok in ("local", "neighborhood", "specialty shop")
+    ):
+        return _PEER_BOUTIQUE
+    return _PEER_MID
+
+
+def _peer_scale_compatible(client_scale: PeerScale, rival_scale: PeerScale) -> bool:
+    if client_scale == _PEER_ENTERPRISE:
+        return True
+    if client_scale == _PEER_MID:
+        # Mid-market ≠ global franchise giants (Pizza Hut / McDonald's)
+        return rival_scale in {_PEER_BOUTIQUE, _PEER_MID}
+    # boutique / indie: never keep enterprise giants as "peers"
+    return rival_scale in {_PEER_BOUTIQUE, _PEER_MID}
+
+
+def _peer_scale_overlap_bonus(client_scale: PeerScale, rival_scale: PeerScale) -> float:
+    if client_scale == rival_scale:
+        return 10.0
+    if client_scale == _PEER_BOUTIQUE and rival_scale == _PEER_MID:
+        return -4.0
+    if client_scale == _PEER_MID and rival_scale == _PEER_ENTERPRISE:
+        return -8.0
+    if client_scale == _PEER_BOUTIQUE and rival_scale == _PEER_ENTERPRISE:
+        return -40.0
+    return 0.0
+
+
+def _peer_scale_prompt_rule(client_scale: PeerScale, *, is_food: bool = False) -> str:
+    base = (
+        "PEER SCALE RULE (applies to every industry): rivals must match the client's market position "
+        "and scale — not only the same category. Prefer brands the client's customers would actually "
+        "compare them against. Do NOT return global giants, hyperscalers, or far larger national "
+        "champions when the client is a local/indie/specialty or boutique brand."
+    )
+    if client_scale == _PEER_BOUTIQUE:
+        extra = (
+            " This client looks boutique/local/specialty — return similar-scale local peers only; "
+            "exclude enterprise / global franchise brands."
+        )
+    elif client_scale == _PEER_MID:
+        extra = " This client is mid-market / national — prefer similar mid-market peers; global giants only if truly head-to-head."
+    else:
+        extra = " This client can compete at enterprise/global scale — peer global brands are allowed."
+    food_extra = ""
+    if is_food and client_scale == _PEER_BOUTIQUE:
+        food_extra = (
+            " Food example: match BOTH scale and category — a local French restaurant gets "
+            "other local restaurants (e.g. Arcadian Cafe, Café Aylanto), NEVER a cake shop "
+            "(Layers), burger chain (Johnny & Jugnu), or global franchise (Pizza Hut / KFC)."
+        )
+    return base + extra + food_extra
 
 
 def _looks_like_software_peer_client(*parts: object) -> bool:
@@ -1042,17 +1851,74 @@ _GENERIC_NAME_RE = re.compile(
     r"[\s\-]?(corp|soft|tech|solutions|systems|company|house)$",
     re.I,
 )
-_PARKED_SITE_MARKERS = (
-    "domain for sale", "buy this domain", "this domain is for sale",
-    "parked domain", "parkingcrew", "sedoparking", "godaddy parking",
-    "coming soon", "under construction", "website coming soon",
-    "account suspended", "default web page", "apache2 ubuntu default",
+# LLM invents "Pizza 24", "Pizza 5", "Burger 360" with matching fake .pk domains
+_FAKE_FOOD_NUMBER_NAME_RE = re.compile(
+    r"^(pizza|burger|cafe|café|shawarma|broast|biryani|karahi)\s*[\-]?\s*"
+    r"(\d{1,4}|2\s*go|to\s*go|express|hub|zone|point|spot|king|queen)$",
+    re.I,
 )
-_SOFTWARE_PEER_SITE_MARKERS = (
-    "software", "development", "digital agency", "web development", "mobile app",
-    "it services", "custom software", "product engineering", "outsourcing",
-    "app development", "devops", "saas", "solutions for",
+_FAKE_FOOD_WORD_NAME_RE = re.compile(
+    r"^(four\s*twenty\s*four|hot\s*and\s*spicy|pizza\s*mania|pizza\s*house)$",
+    re.I,
 )
+# Recipe / dish / SEO menu titles mistaken for restaurant brands
+_RECIPE_OR_DISH_TITLE_MARKERS = (
+    "recipe", "homemade", "street style", "how to make", "how to cook",
+    "ingredients", "step by step", "cooking tutorial", "oven baked",
+    "crispy fried", "easy chicken", "best chicken", "complete shawarma menu",
+)
+_RECIPE_STYLE_TOKENS = (
+    "authentic", "street", "style", "homemade", "pakistani", "lebanese", "turkish",
+    "arabic", "spicy", "crispy", "juicy", "delicious", "traditional", "classic",
+    "chicken", "beef", "mutton", "lamb", "garlic", "loaded", "stuffed",
+)
+_BARE_DISH_NAME_RE = re.compile(
+    r"^(chicken|beef|mutton|lamb|spicy|garlic)?\s*"
+    r"(shawarma|pizza|burger|biryani|karahi|broast|pasta|noodles|wrap|roll)"
+    r"(\s+(platter|wrap|roll|sandwich|meal|combo|special))?$",
+    re.I,
+)
+
+
+def _clean_rival_display_name(name: str) -> str:
+    """Strip SEO taglines: 'Arabic Shawarma: Unique Shawarmas With…' → 'Arabic Shawarma'."""
+    raw = _as_str(name).strip()
+    if not raw:
+        return raw
+    cleaned = re.split(r"\s*[|:–—]\s+", raw, maxsplit=1)[0].strip()
+    cleaned = re.sub(
+        r"\s+[–—-]\s+(unique|authentic|fresh|order|best|home|menu|delivery)\b.*$",
+        "",
+        cleaned,
+        flags=re.I,
+    ).strip()
+    return cleaned or raw
+
+
+def _looks_like_recipe_or_menu_item_name(name: str) -> bool:
+    """True for dish/recipe titles like 'Authentic Pakistani Street Style Chicken Shawarma'."""
+    raw = _as_str(name).strip()
+    if not raw:
+        return True
+    key = re.sub(r"\s+", " ", raw.lower()).strip()
+    words = key.split()
+    if any(m in key for m in _RECIPE_OR_DISH_TITLE_MARKERS):
+        return True
+    if _BARE_DISH_NAME_RE.match(key):
+        return True
+    # Long descriptive food phrase with several style/protein tokens
+    if len(words) >= 5 and any(
+        d in key for d in ("shawarma", "pizza", "burger", "biryani", "karahi", "broast", "pasta")
+    ):
+        style_hits = sum(1 for tok in _RECIPE_STYLE_TOKENS if tok in words)
+        if style_hits >= 3:
+            return True
+    # SEO leftover after clean still reads like marketing copy, not a brand
+    if len(words) >= 6 and key.startswith(
+        ("authentic ", "delicious ", "homemade ", "easy ", "best homemade ", "ultimate ")
+    ):
+        return True
+    return False
 
 
 def _is_generic_or_fake_rival_name(name: str) -> bool:
@@ -1066,9 +1932,23 @@ def _is_generic_or_fake_rival_name(name: str) -> bool:
         return False
     if any(brand == key or brand == compact for brand in _KNOWN_QSR_BRANDS):
         return False
+    if _looks_like_recipe_or_menu_item_name(raw):
+        return True
+    # Blog / photo-gallery style titles (even without a URL)
+    if _looks_like_content_or_cpg_noise(raw):
+        return True
     if key in _GENERIC_RIVAL_NAMES or compact in {re.sub(r"[^a-z0-9]+", "", n) for n in _GENERIC_RIVAL_NAMES}:
         return True
     if _GENERIC_NAME_RE.match(key):
+        return True
+    if _FAKE_FOOD_NUMBER_NAME_RE.match(key):
+        return True
+    if _FAKE_FOOD_WORD_NAME_RE.match(key):
+        return True
+    # "Pizza360" / "pizza24" compacted number brands
+    if re.fullmatch(r"(pizza|burger|cafe|shawarma)\d{1,4}", compact):
+        return True
+    if compact in {"fourtwentyfour", "420pizza", "hotandspicy"}:
         return True
     # Too short / too generic single-token brands
     if len(compact) < 5:
@@ -1076,7 +1956,55 @@ def _is_generic_or_fake_rival_name(name: str) -> bool:
     # "X Solutions" with a very generic X
     if re.match(r"^(tech|soft|pak|it|info|digital|global|smart|web)\s+solutions$", key):
         return True
+    # Category + country placeholders: "Software Development Company India"
+    if re.search(
+        r"\b(software|it|digital|web)\s+(development|developers?|services|solutions|company|house|agency|companies)\b",
+        key,
+    ) and re.search(
+        r"\b(india|pakistan|uae|usa|uk|singapore|bangladesh|remote|offshore|global|saudi|riyadh|dubai)\b",
+        key,
+    ):
+        return True
+    if re.match(
+        r"^(software|it|digital)\s+(development|developers?|services|solutions)\s+(company|companies|firm|house)(\s+\w+)?$",
+        key,
+    ):
+        return True
+    # Listicle / directory titles used as "company" names
+    if re.search(r"\b(companies|developers|agencies)\s+in\s+\w+", key):
+        return True
+    if re.search(r"\b(top|best|leading)\s+\d*\s*(software|it|digital|web)\b", key):
+        return True
     return False
+
+
+def _looks_like_invented_food_domain(name: str, website: str | None) -> bool:
+    """Catch AI pairing 'Pizza 24' with pizza24.pk — not a real peer proof."""
+    host = _domain_of(website or "")
+    if not host:
+        return False
+    host_core = re.sub(r"[^a-z0-9]+", "", host.split(".")[0].lower())
+    compact = re.sub(r"[^a-z0-9]+", "", _as_str(name).lower())
+    if not compact or not host_core:
+        return False
+    if _FAKE_FOOD_NUMBER_NAME_RE.match(re.sub(r"\s+", " ", _as_str(name).lower()).strip()):
+        return True
+    if re.fullmatch(r"(pizza|burger|cafe|shawarma)\d{1,4}", compact) and host_core == compact:
+        return True
+    return False
+
+
+_PARKED_SITE_MARKERS = (
+    "domain for sale", "buy this domain", "this domain is for sale",
+    "parked domain", "parkingcrew", "sedoparking", "godaddy parking",
+    "coming soon", "under construction", "website coming soon",
+    "account suspended", "default web page", "apache2 ubuntu default",
+)
+_SOFTWARE_PEER_SITE_MARKERS = (
+    "software", "development", "digital agency", "web development", "mobile app",
+    "it services", "custom software", "product engineering", "outsourcing",
+    "app development", "devops", "saas", "solutions for",
+)
 
 
 def _site_looks_parked_or_empty(site_md: str) -> bool:
@@ -1143,6 +2071,26 @@ _LOCAL_SOFTWARE_SEEDS: dict[str, list[dict]] = {
         {"name": "DPL", "website": "https://www.dpl.dev"},
         {"name": "Xavor", "website": "https://www.xavor.com"},
     ],
+    "saudi arabia": [
+        {"name": "Neologix", "website": "https://neologix.sa"},
+        {"name": "OSIT", "website": "https://osit.com.sa"},
+        {"name": "Tawakob", "website": "https://tawakob.com"},
+        {"name": "B-IT", "website": "https://b-it.co"},
+        {"name": "MBKS Global", "website": "https://mbksglobal.com"},
+        {"name": "Creative Solutions", "website": "https://www.creative-sols.com"},
+        {"name": "Elm", "website": "https://www.elm.sa"},
+        {"name": "Sary", "website": "https://sary.com"},
+        {"name": "Tamkeen Technologies", "website": "https://www.tamkeen.sa"},
+        {"name": "Saudi Business Machines", "website": "https://www.sbm.com.sa"},
+    ],
+    "uae": [
+        {"name": "Emagine", "website": "https://www.emagine.ae"},
+        {"name": "Intertec Systems", "website": "https://www.intertecsystems.com"},
+        {"name": "Finesse", "website": "https://www.finesse-group.com"},
+        {"name": "Magna", "website": "https://www.magnasolutions.com"},
+        {"name": "AST Computer", "website": "https://www.ast.ae"},
+        {"name": "Gulf Business Machines", "website": "https://www.gbmuae.com"},
+    ],
 }
 _GLOBAL_SOFTWARE_SEEDS: list[dict] = [
     {"name": "EPAM Systems", "website": "https://www.epam.com", "headquarters_country": "United States"},
@@ -1156,19 +2104,59 @@ _GLOBAL_SOFTWARE_SEEDS: list[dict] = [
 ]
 _LOCAL_QSR_SEEDS: dict[str, list[dict]] = {
     "pakistan": [
-        {"name": "Pizza Hut", "website": "https://www.pizzahut.com.pk"},
-        {"name": "Domino's Pizza", "website": "https://www.dominos.com.pk"},
-        {"name": "Broadway Pizza", "website": "https://broadwaypizza.com.pk"},
-        {"name": "California Pizza", "website": "https://www.californiapizza.com.pk"},
-        {"name": "Papa John's", "website": "https://www.papajohns.com.pk"},
-        {"name": "Pizza Max", "website": "https://pizzamax.com.pk"},
-        {"name": "KFC", "website": "https://www.kfcpakistan.com"},
-        {"name": "McDonald's", "website": "https://www.mcdonalds.com.pk"},
-        {"name": "Hardee's", "website": "https://www.hardees.com.pk"},
-        {"name": "Burger Lab", "website": "https://www.burgerlab.com.pk"},
-        {"name": "OPTP", "website": "https://www.optp.biz"},
-        {"name": "Ranchers", "website": "https://www.rancherscafe.com"},
-        {"name": "Howdy", "website": "https://www.howdy.pk"},
+        # restaurants / casual dining (Meet Me in Paris peers) — keep ≥8 so slider count can fill
+        {"name": "Salt'n Pepper", "website": "https://www.saltnpepperonline.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_RESTAURANT},
+        {"name": "Arcadian Cafe", "website": "https://www.arcadiancafe.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_RESTAURANT},
+        {"name": "Café Aylanto", "website": "https://www.aylanto.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_RESTAURANT},
+        {"name": "Tuscany Courtyard", "website": "https://www.tuscanycourtyard.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_RESTAURANT},
+        {"name": "Café Zouk", "website": "https://www.cafezouk.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_RESTAURANT},
+        {"name": "Cosa Nostra", "website": "https://www.cosanostra.com.pk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_RESTAURANT},
+        {"name": "Cooco's Den", "website": "https://www.coocosden.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_RESTAURANT},
+        {"name": "Spice Bazaar", "website": "https://www.spicebazaar.pk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_RESTAURANT},
+        {"name": "The Brasserie", "website": "https://www.pearlcont.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_RESTAURANT},
+        {"name": "Jade Cafe", "website": "https://www.jadecafe.com.pk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_RESTAURANT},
+        {"name": "Haveli Restaurant", "website": "https://www.haveli.com.pk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_RESTAURANT},
+        {"name": "Cubano", "website": "https://www.cubano.pk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_RESTAURANT},
+        # NOTE: do NOT seed "Cucina" (PK furniture/kitchens) or "Andiamo" (Dubai Hyatt Italian)
+        # cafe (coffee-led — not restaurant peers)
+        {"name": "Espresso Lab", "website": "https://www.espressolab.com.pk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_CAFE},
+        {"name": "Gloria Jean's Coffees", "website": "https://www.gloriajeans.com.pk", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_CAFE},
+        # bakery / cake shop (not restaurant peers)
+        {"name": "Layers Bakeshop", "website": "https://www.layers.com.pk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Butlers Chocolate Café", "website": "https://www.butlerschocolates.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BAKERY},
+        # burger / indie QSR
+        {"name": "Johnny & Jugnu", "website": "https://www.johnnyandjugnu.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BURGER},
+        {"name": "Mad", "website": "https://www.mad.com.pk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BURGER},
+        {"name": "Burger Lab", "website": "https://www.burgerlab.com.pk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BURGER},
+        # shawarma / Arabic wrap QSR (Sultan Shawarma peers) — last-resort only
+        {"name": "Shawarma Stop", "website": "https://shawarmastop.co", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_SHAWARMA},
+        {"name": "PITA", "website": "https://heypita.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_SHAWARMA},
+        {"name": "Arabic Shawarma", "website": "https://arabicshawarma.pk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_SHAWARMA},
+        {"name": "Monty Shawarma", "website": "https://montysshawarma.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_SHAWARMA},
+        {"name": "Rizwan Pocket Shawarma", "website": "https://rizwanpocketshawarma.pk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_SHAWARMA},
+        # asian
+        {"name": "Ginsoy", "website": "https://www.ginsoy.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_ASIAN},
+        {"name": "Ginyaki", "website": "https://ginyaki.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_ASIAN},
+        # national chains
+        {"name": "Cheezious", "website": "https://www.cheezious.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_PIZZA},
+        {"name": "Broadway Pizza", "website": "https://broadwaypizza.com.pk", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_PIZZA},
+        {"name": "California Pizza", "website": "https://www.californiapizza.com.pk", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_PIZZA},
+        {"name": "Pizza Max", "website": "https://pizzamax.com.pk", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_PIZZA},
+        {"name": "Caesars Pizza", "website": "https://caesars.com.pk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_PIZZA},
+        {"name": "Eastern Oven", "website": "https://easternoven.pk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_PIZZA},
+        {"name": "Pizza M21", "website": "https://www.pizzam21.pk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_PIZZA},
+        {"name": "Caprinos", "website": "https://caprinos.com.pk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_PIZZA},
+        {"name": "NY212 Pizza", "website": "https://orders.ny-212.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_PIZZA},
+        {"name": "Howdy", "website": "https://www.howdy.pk", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BURGER},
+        {"name": "OPTP", "website": "https://www.optp.biz", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BURGER},
+        {"name": "Ranchers", "website": "https://www.rancherscafe.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BURGER},
+        # global franchises
+        {"name": "Pizza Hut", "website": "https://www.pizzahut.com.pk", "tier": _FOOD_TIER_GLOBAL, "format": _FOOD_FORMAT_PIZZA},
+        {"name": "Domino's Pizza", "website": "https://www.dominos.com.pk", "tier": _FOOD_TIER_GLOBAL, "format": _FOOD_FORMAT_PIZZA},
+        {"name": "Papa John's", "website": "https://www.papajohns.com.pk", "tier": _FOOD_TIER_GLOBAL, "format": _FOOD_FORMAT_PIZZA},
+        {"name": "KFC", "website": "https://www.kfcpakistan.com", "tier": _FOOD_TIER_GLOBAL, "format": _FOOD_FORMAT_GENERAL},
+        {"name": "McDonald's", "website": "https://www.mcdonalds.com.pk", "tier": _FOOD_TIER_GLOBAL, "format": _FOOD_FORMAT_BURGER},
+        {"name": "Hardee's", "website": "https://www.hardees.com.pk", "tier": _FOOD_TIER_GLOBAL, "format": _FOOD_FORMAT_BURGER},
     ],
 }
 
@@ -1179,44 +2167,78 @@ def _seed_local_software_rivals(
     *,
     already_have: list[str] | None = None,
     client_website: str | None = None,
+    client_peer_scale: PeerScale | None = None,
+    client_niche: str = "",
+    client_industry: str = "",
     limit: int = 8,
 ) -> list[dict]:
     key = _normalize_country_key(market)
-    seeds = _LOCAL_SOFTWARE_SEEDS.get(key) or []
+    seeds = list(_LOCAL_SOFTWARE_SEEDS.get(key) or [])
     if not seeds:
         return []
+    scale = client_peer_scale or _peer_scale_from_blob(
+        client_name, client_niche, client_industry, name=client_name
+    )
     blocked = _blocked_rival_keys(already_have, client_name, websites=[client_website] if client_website else None)
     client_host = _domain_of(client_website or "")
-    out: list[dict] = []
-    for seed in seeds:
+
+    def _build(seed: dict) -> dict | None:
         name = _as_str(seed.get("name")).strip()
         website = _normalize_website(_as_str(seed.get("website")) or None)
         if not name or not website:
-            continue
+            return None
+        rival_scale = _peer_scale_from_blob(name, "software house", name=name, website=website)
+        if not _peer_scale_compatible(scale, rival_scale):
+            return None
         seed_keys = _rival_keys(name, website)
         if seed_keys & blocked or _is_generic_or_fake_rival_name(name):
-            continue
+            return None
         if client_host and _domain_of(website) == client_host:
+            return None
+        base = 78.0 if rival_scale == scale else 72.0
+        base += _peer_scale_overlap_bonus(scale, rival_scale)
+        is_large_national = any(tok in name.lower() for tok in _SOFTWARE_LARGE_NATIONAL)
+        if scale == _PEER_BOUTIQUE and is_large_national:
+            base -= 6
+        return {
+            "name": name,
+            "website": website,
+            "industry": "Software",
+            "business_model": "services",
+            "headquarters_country": key.title() if key else market,
+            "why_relevant": (
+                f"Same-tier software / digital peer in {market} ({rival_scale.replace('_', ' ')}); "
+                f"competes for similar buyers as {client_name}."
+            ),
+            "threat_level": "high" if rival_scale == scale else "medium",
+            "overlap_score": max(60.0, min(90.0, base)),
+            "same_niche": True,
+            "same_market": True,
+            "peer_scale": rival_scale,
+            "source": "seed",
+            "_large_national": is_large_national,
+            "_keys": seed_keys,
+        }
+
+    primary: list[dict] = []
+    fallback: list[dict] = []
+    for seed in seeds:
+        row = _build(seed)
+        if not row:
             continue
-        out.append(
-            {
-                "name": name,
-                "website": website,
-                "industry": "Software",
-                "business_model": "services",
-                "headquarters_country": key.title() if key else market,
-                "why_relevant": (
-                    f"Established commercial software house / digital product firm in {market}; "
-                    f"peer IT services rival for local software buyers."
-                ),
-                "threat_level": "high",
-                "overlap_score": 72,
-                "same_niche": True,
-                "same_market": True,
-                "source": "seed",
-            }
-        )
-        blocked |= seed_keys
+        if scale == _PEER_BOUTIQUE and row.pop("_large_national", False):
+            fallback.append(row)
+        else:
+            row.pop("_large_national", None)
+            primary.append(row)
+
+    out: list[dict] = []
+    for row in primary + (fallback if scale == _PEER_BOUTIQUE else []):
+        keys = row.pop("_keys", set())
+        if keys & blocked:
+            continue
+        out.append(row)
+        blocked |= keys
         if len(out) >= limit:
             break
     return out
@@ -1226,8 +2248,13 @@ def _seed_global_software_rivals(
     client_name: str,
     *,
     already_have: list[str] | None = None,
+    client_peer_scale: PeerScale | None = None,
     limit: int = 8,
 ) -> list[dict]:
+    scale = client_peer_scale or _peer_scale_from_blob(client_name, name=client_name)
+    # Boutique local clients should not be seeded with global engineering giants
+    if scale == _PEER_BOUTIQUE:
+        return []
     blocked = _blocked_rival_keys(already_have, client_name)
     out: list[dict] = []
     for seed in _GLOBAL_SOFTWARE_SEEDS:
@@ -1237,8 +2264,6 @@ def _seed_global_software_rivals(
             continue
         seed_keys = _rival_keys(name, website)
         if seed_keys & blocked or _is_generic_or_fake_rival_name(name):
-            continue
-        if not website:
             continue
         out.append(
             {
@@ -1254,6 +2279,7 @@ def _seed_global_software_rivals(
                 "overlap_score": 70,
                 "same_niche": True,
                 "same_market": True,
+                "peer_scale": _PEER_ENTERPRISE,
                 "source": "seed",
             }
         )
@@ -1269,12 +2295,31 @@ def _seed_local_qsr_rivals(
     *,
     already_have: list[str] | None = None,
     client_website: str | None = None,
+    client_tier: FoodTier | None = None,
+    client_niche: str = "",
+    client_industry: str = "",
     limit: int = 8,
 ) -> list[dict]:
     key = _normalize_country_key(market)
-    seeds = _LOCAL_QSR_SEEDS.get(key) or []
+    seeds = list(_LOCAL_QSR_SEEDS.get(key) or [])
     if not seeds:
         return []
+    tier = client_tier or _food_tier_from_blob(client_name, client_niche, client_industry)
+    client_fmt = _food_format_from_blob(client_name, client_niche, client_industry)
+    # Prefer same-format + same-tier first
+    tier_rank = {_FOOD_TIER_LOCAL: 0, _FOOD_TIER_NATIONAL: 1, _FOOD_TIER_GLOBAL: 2}
+    client_rank = tier_rank.get(tier, 0)
+
+    def _seed_sort_key(seed: dict) -> tuple:
+        st = _as_str(seed.get("tier")) or _food_tier_from_blob(_as_str(seed.get("name")))
+        sf = _as_str(seed.get("format")) or _food_format_from_blob(_as_str(seed.get("name")))
+        sr = tier_rank.get(st, 9)
+        same_fmt = 0 if _food_format_compatible(client_fmt, sf) and (
+            client_fmt == sf or client_fmt == _FOOD_FORMAT_GENERAL
+        ) else (1 if _food_format_compatible(client_fmt, sf) else 2)
+        return (same_fmt, abs(sr - client_rank), sr)
+
+    seeds = sorted(seeds, key=_seed_sort_key)
     blocked = _blocked_rival_keys(already_have, client_name, websites=[client_website] if client_website else None)
     client_host = _domain_of(client_website or "")
     out: list[dict] = []
@@ -1283,28 +2328,59 @@ def _seed_local_qsr_rivals(
         website = _normalize_website(_as_str(seed.get("website")) or None)
         if not name or not website:
             continue
+        rival_tier = _as_str(seed.get("tier")) or _food_tier_from_blob(name)
+        rival_fmt = _as_str(seed.get("format")) or _food_format_from_blob(name)
+        if not _food_tier_compatible(tier, rival_tier):
+            continue
+        if not _food_format_compatible(client_fmt, rival_fmt):
+            continue
+        # Local specialty: prefer local peers first; still allow national same-category fill
+        if (
+            tier == _FOOD_TIER_LOCAL
+            and rival_tier == _FOOD_TIER_NATIONAL
+            and len(out) >= max(3, limit)
+        ):
+            continue
         seed_keys = _rival_keys(name, website)
         if seed_keys & blocked:
             continue
-        if not website:
-            continue
         if client_host and _domain_of(website) == client_host:
             continue
+        base_overlap = 82.0 if rival_tier == tier else (74.0 if rival_tier == _FOOD_TIER_LOCAL else 70.0)
+        base_overlap += _food_tier_overlap_bonus(tier, rival_tier)
+        base_overlap += _food_format_overlap_bonus(client_fmt, rival_fmt)
         out.append(
             {
                 "name": name,
                 "website": website,
-                "industry": "Fast food",
+                "industry": (
+                    "Restaurant"
+                    if rival_fmt == _FOOD_FORMAT_RESTAURANT
+                    else "Cafe"
+                    if rival_fmt == _FOOD_FORMAT_CAFE
+                    else "Bakery"
+                    if rival_fmt == _FOOD_FORMAT_BAKERY
+                    else "Fast food"
+                ),
                 "business_model": "other",
                 "headquarters_country": key.title() if key else market,
                 "why_relevant": (
-                    f"Established quick-service / pizza-burger food chain in {market}; "
-                    f"peer restaurant rival for the same local diners and delivery buyers."
+                    f"Same-category {rival_fmt} peer in {market} ({rival_tier.replace('_', ' ')}); "
+                    f"competes for similar diners as {client_name}."
                 ),
-                "threat_level": "high",
-                "overlap_score": 78,
+                "threat_level": "high" if rival_tier == tier and rival_fmt == client_fmt else "medium",
+                "overlap_score": max(60.0, min(90.0, base_overlap)),
                 "same_niche": True,
                 "same_market": True,
+                "food_tier": rival_tier,
+                "food_format": rival_fmt,
+                "peer_scale": (
+                    _PEER_BOUTIQUE
+                    if rival_tier == _FOOD_TIER_LOCAL
+                    else _PEER_ENTERPRISE
+                    if rival_tier == _FOOD_TIER_GLOBAL
+                    else _PEER_MID
+                ),
                 "source": "seed",
             }
         )
@@ -1406,6 +2482,8 @@ def _incompatible_peer(
     if client_is_food and rival_is_software:
         return True
     if client_is_software and rival_is_food:
+        return True
+    if client_is_food and _looks_like_fmcg_or_snack_brand(rival_l):
         return True
     if "software_services" in rival_verticals and not client_is_software:
         return True
@@ -1510,50 +2588,152 @@ def _set_business_model(client: ClientBrand, business_model: str) -> None:
     client.notes = "\n".join(lines).strip() or None
 
 
-def _niche_competitor_queries(client: ClientBrand, market_area: str = "") -> list[str]:
-    niche = _as_str(client.niche) or _as_str(client.industry) or "software"
+def _niche_competitor_queries(
+    client: ClientBrand,
+    market_area: str = "",
+    *,
+    scope: str = "local",
+) -> list[str]:
+    niche = _as_str(client.niche) or _as_str(client.industry) or "business"
     market = market_area or _market_area_from_client(client)
     model = _business_model_from_client(client).lower()
     niche_l = niche.lower()
-    queries = [
-        f"{client.name} competitors {niche}",
-        f"companies like {client.name} {niche}",
-        f"{niche} agencies competitors {client.name}",
-    ]
-    # Software-house / IT services clients need peer-shaped queries, not generic "technology"
-    if any(tok in f"{niche_l} {model} {_as_str(client.industry).lower()}" for tok in (
-        "software", "agency", "it services", "development", "digital",
-    )):
-        if market:
-            queries.extend(
-                [
-                    f"top software houses in {market}",
-                    f"software development companies in {market}",
-                    f"digital agencies {market} like {client.name}",
-                    f"IT services companies {market}",
-                    f"{client.name} competitors software house {market}",
+    food_blob = f"{client.name} {niche} {_as_str(client.industry)} {model}"
+    is_global = str(scope).lower() == "global"
+    # Never bake a local country into global Serp queries
+    geo = "" if is_global else _as_str(market).strip()
+    queries: list[str] = []
+
+    # Food / QSR: use format detector (Cheezious → pizza even when niche says "restaurant")
+    if _looks_like_food_client(food_blob):
+        food_tier = _food_tier_from_blob(client.name, niche, client.industry)
+        fmt = _food_format_from_blob(client.name, niche, client.industry, client.notes, client.tagline)
+        format_q = {
+            _FOOD_FORMAT_PIZZA: "pizza places",
+            _FOOD_FORMAT_SHAWARMA: "shawarma places",
+            _FOOD_FORMAT_BAKERY: "bakeries",
+            _FOOD_FORMAT_CAFE: "cafes",
+            _FOOD_FORMAT_BURGER: "burger places",
+            _FOOD_FORMAT_ASIAN: "asian restaurants",
+            _FOOD_FORMAT_RESTAURANT: "restaurants",
+        }.get(fmt, "restaurants")
+        if is_global:
+            if format_q == "pizza places":
+                queries = [
+                    f"{client.name} pizza chain competitors worldwide",
+                    "international pizza delivery chains competitors",
+                    f"global pizza brands like {client.name}",
+                    "best international pizza restaurant chains",
                 ]
-            )
-        else:
-            queries.extend(
-                [
-                    f"software development companies like {client.name}",
-                    f"digital agencies competitors {client.name}",
+            elif format_q == "shawarma places":
+                queries = [
+                    f"{client.name} shawarma competitors international",
+                    "global shawarma / doner restaurant chains",
+                    f"international wrap and shawarma brands like {client.name}",
                 ]
-            )
-    if market:
-        queries.extend(
-            [
-                f"{niche} companies in {market}",
-                f"{niche} agencies {market} like {client.name}",
-                f"{client.name} competitors {market}",
+            else:
+                queries = [
+                    f"{client.name} {format_q} competitors worldwide",
+                    f"global {format_q} brands like {client.name}",
+                    f"international {format_q} chains same category as {client.name}",
+                ]
+        elif format_q == "pizza places":
+            queries = [
+                f'pizza restaurants {geo} -"Pizza Hut" -Domino -"Papa John"'.strip(),
+                f"best pizza places Lahore {geo}".strip()
+                if _normalize_country_key(geo) == "pakistan"
+                else f"best pizza places {geo}".strip(),
+                f"{client.name} pizza competitors {geo}".strip(),
+                f"Broadway Pizza Pizza Max California Pizza Eastern Oven {geo}".strip(),
+                f"local pizza brands {geo} website".strip(),
             ]
-        )
+        elif format_q == "shawarma places":
+            queries = [
+                f"shawarma places {geo} -instagram -foodpanda -tripadvisor".strip(),
+                f"best shawarma Lahore {geo}".strip()
+                if _normalize_country_key(geo) == "pakistan"
+                else f"best shawarma {geo}".strip(),
+                f"{client.name} shawarma competitors {geo}".strip(),
+                f'"Shawarma Stop" PITA "Arabic Shawarma" "Monty Shawarma" {geo}'.strip(),
+                f"shawarma brands {geo} website -foodpanda".strip(),
+            ]
+        elif format_q == "restaurants":
+            queries = [
+                f"casual dining restaurants {geo}".strip(),
+                f"{client.name} restaurant competitors {geo}".strip(),
+                f"best restaurants {geo} local brands".strip(),
+                f"independent restaurants {geo}".strip(),
+            ]
+        else:
+            queries = [
+                f"{format_q} in {geo}".strip(),
+                f"best {format_q} {geo} local brands".strip(),
+                f"{client.name} {format_q} competitors {geo}".strip(),
+                f"local {format_q} like {client.name} in {geo}".strip(),
+            ]
+        if (not is_global) and _foreign_places_echoed_from_brand(client.name, geo):
+            queries = [
+                f"popular {format_q} {geo}".strip(),
+                f"local {format_q} {geo}".strip(),
+                f"{client.name} {geo} competitors".strip(),
+            ] + queries
+        if (not is_global) and food_tier == _FOOD_TIER_LOCAL and format_q not in {
+            "pizza places",
+            "shawarma places",
+        }:
+            queries.extend(
+                [
+                    f"independent {format_q} {geo} not Pizza Hut".strip(),
+                    f"popular local {format_q} {geo}".strip(),
+                ]
+            )
+    # Software-house / IT services — only when client is actually software
+    elif _looks_like_software_peer_client(client.name, niche, client.industry, model):
+        if is_global:
+            queries = [
+                f"global software development companies like {client.name}",
+                f"international IT services firms competitors {client.name}",
+                f"digital product companies similar to {client.name} worldwide",
+            ]
+        elif geo:
+            queries = [
+                f"top software houses in {geo}",
+                f"software development companies in {geo}",
+                f"digital agencies {geo} like {client.name}",
+                f"IT services companies {geo}",
+                f"{client.name} competitors software house {geo}",
+            ]
+        else:
+            queries = [
+                f"software development companies like {client.name}",
+                f"digital agencies competitors {client.name}",
+            ]
+    else:
+        if is_global:
+            queries = [
+                f"{client.name} competitors {niche} worldwide",
+                f"global companies like {client.name} {niche}",
+                f"international {niche} brands similar to {client.name}",
+            ]
+        else:
+            queries = [
+                f"{client.name} competitors {niche} {geo}".strip(),
+                f"companies like {client.name} {niche} {geo}".strip(),
+            ]
+            if geo:
+                queries.extend(
+                    [
+                        f"{niche} companies in {geo}",
+                        f"{client.name} competitors {geo}",
+                        f"local {niche} brands similar to {client.name} {geo}",
+                    ]
+                )
+
     out: list[str] = []
     seen: set[str] = set()
     for q in queries:
         key = q.lower().strip()
-        if key in seen:
+        if not key or key in seen:
             continue
         seen.add(key)
         out.append(q.strip())
@@ -1564,10 +2744,38 @@ _SERP_NOISE_DOMAINS = {
     "g2.com", "capterra.com", "getapp.com", "softwareadvice.com", "trustradius.com",
     "clutch.co", "goodfirms.co", "sortlist.com", "designrush.com", "upcity.com",
     "linkedin.com", "facebook.com", "twitter.com", "x.com", "instagram.com", "youtube.com",
+    "tiktok.com", "vm.tiktok.com",
     "wikipedia.org", "crunchbase.com", "bloomberg.com", "forbes.com", "techcrunch.com",
     "medium.com", "reddit.com", "quora.com", "glassdoor.com", "indeed.com",
     "producthunt.com", "alternativeto.net", "saashub.com", "slashdot.org",
+    "tripadvisor.com", "tripadvisor.com.pk", "wheree.com", "jagha.pk", "menuprices.pk",
+    "foodpanda.pk", "foodpanda.com", "foodiespakistan.pk",
+    # Blogs / galleries / CPG — not restaurant peers
+    "pakistantravelblog.com", "magnific.com", "pinterest.com", "blogspot.com",
+    "wordpress.com", "substack.com", "travelblog.org",
+    "dawnbread.com", "dawnbread.com.pk", "dawnfoods.com",
+    "google.com", "photos.google.com",
+    # Directories / listicles mistaken as software peers
+    "entasher.com", "clutch.co", "goodfirms.co", "sortlist.com",
+    "techbehemoths.com", "designrush.com", "upcity.com",
 }
+
+# Host markers (substring) for content / grocery sites mistaken as rivals
+_CONTENT_OR_CPG_HOST_MARKERS = (
+    "travelblog", "foodblog", "blog", "magazine", "recipes", "photos",
+    "bread", "bakerywholesale", "flour", "grocery",
+)
+_CPG_PATH_MARKERS = ("/product/", "/products/", "/shop/", "/sku/")
+_DIRECTORY_OR_LISTICLE_PATH_MARKERS = (
+    "/companies/", "/company/", "/agencies/", "/top-", "/best-",
+    "/10-top-", "/software-companies", "/it-companies", "/list-of-",
+)
+_CITY_IN_TITLE_RE = re.compile(
+    r"\b(food|shawarma|pizza|burger|biryani|cafe|restaurant)s?\s+in\s+"
+    r"(islamabad|lahore|karachi|rawalpindi|peshawar|multan|faisalabad|pakistan|"
+    r"dubai|london|toronto|new york)\b",
+    re.I,
+)
 
 
 def _is_serp_noise_domain(url: str) -> bool:
@@ -1577,6 +2785,108 @@ def _is_serp_noise_domain(url: str) -> bool:
     for blocked in _SERP_NOISE_DOMAINS:
         if host == blocked or host.endswith("." + blocked):
             return True
+    return False
+
+
+def _looks_like_content_or_cpg_noise(name: str, website: str | None = None) -> bool:
+    """
+    True for travel blogs, photo galleries, bread/CPG product pages —
+    e.g. 'Yemeni Food in Islamabad', 'Pakistani shawarma Photos', 'Dawn Shawarma' (bread).
+    """
+    raw = _as_str(name).strip()
+    key = re.sub(r"\s+", " ", raw.lower()).strip()
+    if not key:
+        return True
+    # Photo / gallery titles
+    if re.search(r"\bphotos?\b|\bgallery\b|\bimages?\b", key):
+        return True
+    # Travel/listicle: "Yemeni Food in Islamabad"
+    if _CITY_IN_TITLE_RE.search(key):
+        return True
+    # Explicit blog/listicle cues in the name
+    if any(tok in key for tok in (" food blog", "travel blog", "best places", "things to eat")):
+        return True
+
+    website = _as_str(website).strip().lower()
+    if not website:
+        # Name-only: Dawn Shawarma alone is ambiguous — only block with site cues
+        return False
+    host = _domain_of(website)
+    path = ""
+    try:
+        from urllib.parse import urlparse
+
+        path = (urlparse(website if "://" in website else f"https://{website}").path or "").lower()
+    except Exception:
+        path = ""
+
+    if _is_serp_noise_domain(website):
+        return True
+    if any(m in host for m in _CONTENT_OR_CPG_HOST_MARKERS):
+        # Allow real restaurants whose host merely contains "photos" only if name looks like a brand
+        if "photos" in host or "blog" in host or "travel" in host:
+            return True
+        if "bread" in host:
+            return True
+    if any(m in path for m in _CPG_PATH_MARKERS) and any(
+        tok in host for tok in ("bread", "dawn", "foods", "grocery", "wholesale")
+    ):
+        return True
+    # Directory / ranking listicles mistaken as the rival company itself
+    if any(m in path for m in _DIRECTORY_OR_LISTICLE_PATH_MARKERS):
+        return True
+    if "dawn" in key and "shawarma" in key and "bread" in host:
+        return True
+    return False
+
+
+# Packaged snacks / FMCG conglomerates — not restaurant/QSR peers (Cheezious ≠ Unilever)
+_FMCG_OR_SNACK_BRANDS = (
+    "unilever", "pepsico", "pepsi co", "nestle", "nestlé", "procter", "p&g",
+    "munchies", "munchies foods", "lays", "lay's", "kurkure", "cheetos", "doritos",
+    "ismail industries", "candyland", "english biscuit", "ebm ", "olympia",
+    "mitchell's", "mitchells", "national foods", "shan foods", "sufi",
+    "dawn bread", "dawn foods", "mitchell", "fauji foods", "engro foods",
+    "k&n's", "k and n", "menu foods", "pakola", "shezan",
+)
+_FMCG_OR_SNACK_MARKERS = (
+    "fmcg", "cpg", "consumer goods", "packaged snack", "snack food", "snack manufacturer",
+    "cheese-flavored snack", "cheese flavoured snack", "flavored chips", "potato chips",
+    "shelf space", "supermarket brand", "retail distribution network",
+    "biscuit manufacturer", "confectionery manufacturer", "beverage giant",
+    "home and personal care", "personal care brands",
+)
+
+
+def _looks_like_fmcg_or_snack_brand(*parts: object) -> bool:
+    """True for Unilever / PepsiCo / Munchies-style packaged goods — not QSR peers."""
+    blob = _context_blob(*parts)
+    if not blob:
+        return False
+    # Real restaurants sometimes sell "snacks" on a menu — require brand or strong CPG cues
+    if any(brand in blob for brand in _FMCG_OR_SNACK_BRANDS):
+        return True
+    hits = sum(1 for m in _FMCG_OR_SNACK_MARKERS if m in blob)
+    if hits >= 2:
+        return True
+    if hits >= 1 and any(tok in blob for tok in ("manufacturer", "subsidiary", "conglomerate", "distribution network")):
+        return True
+    return False
+
+
+def _looks_like_marketing_slogan_name(name: str) -> bool:
+    """
+    Only block obvious non-brand Serp junk — NOT real pizza shops whose trade name
+    is slogan-ish (e.g. 'Savor The Biggest Pizza in Town', 'Pizza Online').
+    """
+    key = re.sub(r"\s+", " ", _as_str(name).lower()).strip()
+    if not key or len(key) < 18:
+        return False
+    # Long imperative ad copy with CTA — not a storefront name
+    if re.search(r"\b(order it today|order now|baked to perfection|made fresh[,—-])\b", key):
+        return True
+    if key.count(" ") >= 8 and re.search(r"\b(from classic to|has it all|check .+ menu)\b", key):
+        return True
     return False
 
 
@@ -1600,16 +2910,25 @@ def _filter_niche_competitors(
     min_overlap: float = 55.0,
     limit: int = 10,
     require_local_market: bool = False,
+    client_food_tier: FoodTier | None = None,
+    client_peer_scale: PeerScale | None = None,
 ) -> list[dict]:
-    """Keep only peer rivals that fit niche/industry; rank by relevance score."""
+    """Keep only peer rivals that fit niche/industry/scale; rank by relevance score."""
     scored: list[dict] = []
     seen_names: set[str] = set()
     seen_hosts: set[str] = set()
-    client_l = client_name.lower().strip()
     niche_l = niche.lower().strip()
     industry_l = industry.lower().strip()
     market_l = market_area.lower().strip()
     model_l = business_model.lower().strip()
+    food_client = _looks_like_food_client(client_name, niche, industry, business_model)
+    food_tier = client_food_tier or (
+        _food_tier_from_blob(client_name, niche, industry) if food_client else None
+    )
+    client_food_fmt = _food_format_from_blob(client_name, niche, industry) if food_client else ""
+    peer_scale = client_peer_scale or _peer_scale_from_blob(
+        client_name, niche, industry, business_model, name=client_name
+    )
 
     for item in items:
         if not isinstance(item, dict):
@@ -1619,14 +2938,47 @@ def _filter_niche_competitors(
         item_keys = _rival_keys(name, website)
         if not name or (_rival_keys(client_name) & item_keys) or (item_keys & seen_names):
             continue
+        if _is_self_rival(client_name, name, website=website):
+            continue
         if _is_generic_or_fake_rival_name(name) and _as_str(item.get("source")).lower() != "seed":
+            continue
+        if _looks_like_invented_food_domain(name, website) and _as_str(item.get("source")).lower() != "seed":
+            continue
+        if _looks_like_brand_geo_hallucination(
+            client_name,
+            name,
+            market_l,
+            website=website,
+            source=_as_str(item.get("source")),
+        ):
             continue
         host = _domain_of(website or "")
         if host and host in seen_hosts:
             continue
         if _is_global_megarival(name, website):
+            if peer_scale in {_PEER_BOUTIQUE, _PEER_MID} and require_local_market:
+                continue
+            if peer_scale == _PEER_BOUTIQUE:
+                continue
+        # Indie/local / boutique brands must not get Pizza Hut / Domino's / KFC as "peers"
+        if (food_tier == _FOOD_TIER_LOCAL or peer_scale == _PEER_BOUTIQUE) and _is_global_food_franchise(
+            name, website
+        ):
             continue
         if website and _is_serp_noise_domain(website):
+            continue
+        if _looks_like_content_or_cpg_noise(name, website):
+            continue
+        if food_client and (
+            _looks_like_fmcg_or_snack_brand(
+                name,
+                item.get("why_relevant"),
+                item.get("description"),
+                item.get("industry"),
+                website,
+            )
+            or _looks_like_marketing_slogan_name(name)
+        ):
             continue
         if item.get("same_niche") is False or item.get("is_global_platform") is True:
             continue
@@ -1638,6 +2990,14 @@ def _filter_niche_competitors(
             or _as_str(item.get("source")).lower() in {"serp", "seed"}
             or _name_aligned_with_domain(name, website)
         )
+        # Name↔domain alignment alone is NOT proof — "Pizza 5" + pizza5.pk is still fake
+        if (
+            website
+            and _as_str(item.get("source")).lower() not in {"serp", "seed"}
+            and alignment_ok
+            and _looks_like_invented_food_domain(name, website)
+        ):
+            continue
         if website and not alignment_ok and require_local_market:
             continue
 
@@ -1653,14 +3013,47 @@ def _filter_niche_competitors(
             score -= 20
 
         blob = f"{name} {why} {website or ''} {item_industry} {item_model} {hq_country}".lower()
+        rival_food_tier = _as_str(item.get("food_tier")) or (
+            _FOOD_TIER_GLOBAL
+            if _is_global_food_franchise(name, website)
+            else _food_tier_from_blob(name, item_industry, why)
+            if food_client
+            else ""
+        )
+        rival_scale = _as_str(item.get("peer_scale")) or _peer_scale_from_blob(
+            name, item_industry, why, name=name, website=website
+        )
+        if not _peer_scale_compatible(peer_scale, rival_scale):
+            continue
+        score += _peer_scale_overlap_bonus(peer_scale, rival_scale)
+        if food_tier and rival_food_tier:
+            if not _food_tier_compatible(food_tier, rival_food_tier):
+                continue
+            score += _food_tier_overlap_bonus(food_tier, rival_food_tier)
+        if food_client and client_food_fmt and client_food_fmt != _FOOD_FORMAT_GENERAL:
+            # Do not use why_relevant for format — seeds often say "…as {client}" and
+            # brand tokens (e.g. Cheezious→pizza) would mis-label software houses.
+            rival_fmt = _as_str(item.get("food_format")) or _food_format_from_blob(
+                name, item_industry
+            )
+            src = _as_str(item.get("source")).lower()
+            if rival_fmt == _FOOD_FORMAT_GENERAL and src in {"serp", "seed"}:
+                # Provisional until pack verifies; prefer same-category later
+                score -= 12
+            elif not _food_format_compatible(client_food_fmt, rival_fmt):
+                continue
+            else:
+                score += _food_format_overlap_bonus(client_food_fmt, rival_fmt)
 
+        # Exclude client brand from rival copy so "…as Cheezious" does not mark a software house as food
+        rival_kind_blob = f"{name} {item_industry} {item_model} {hq_country}"
         if _incompatible_peer(
             client_model=model_l,
             client_industry=industry_l,
             client_niche=niche_l,
             rival_model=item_model,
             rival_industry=item_industry,
-            rival_blob=blob,
+            rival_blob=rival_kind_blob,
             client_name=client_name,
         ):
             continue
@@ -1675,9 +3068,19 @@ def _filter_niche_competitors(
                 continue
             has_local_signal = _mentions_target_market(blob, website, market_l)
             if not has_local_signal:
+                hq_key = _normalize_country_key(hq_country)
+                market_key = _normalize_country_key(market_l)
+                if hq_key and market_key and hq_key == market_key:
+                    has_local_signal = True
+            if not has_local_signal:
                 # SERP rows are provisional — pack scrape verifies HQ later
-                if _as_str(item.get("source")).lower() == "serp":
+                src = _as_str(item.get("source")).lower()
+                if src == "serp":
                     score -= 8
+                elif src == "seed":
+                    # Curated local peers already market-scoped
+                    has_local_signal = True
+                    score += 6
                 else:
                     # AI must cite the country/city; bare same_market=true is not enough
                     continue
@@ -1706,14 +3109,29 @@ def _filter_niche_competitors(
             if _mentions_target_market(blob, website, market_l):
                 score += 16
             elif require_local_market:
-                score -= 30
+                src = _as_str(item.get("source")).lower()
+                if src == "serp":
+                    # Organic results are already geo-biased via Serp gl/location —
+                    # don't nuke them when the snippet omits the country name.
+                    score -= 6
+                elif src == "seed":
+                    score += 4
+                else:
+                    score -= 30
 
         # Local runs need a usable website when one is claimed
         if require_local_market and _as_str(item.get("website")) and not website:
             continue
 
         score = max(0.0, min(score, 95.0))
-        local_min = max(min_overlap, 60.0) if require_local_market else min_overlap
+        # SERP/seed rows are provisional — allow slightly below AI threshold so real peers survive
+        src_final = _as_str(item.get("source")).lower()
+        if require_local_market and src_final in {"serp", "seed"}:
+            local_min = max(48.0, min_overlap - 5.0)
+        elif require_local_market:
+            local_min = max(min_overlap, 60.0)
+        else:
+            local_min = min_overlap
         if score < local_min:
             continue
 
@@ -1733,11 +3151,31 @@ def _filter_niche_competitors(
                 "why_relevant": why or item.get("why_relevant"),
                 "overlap_score": score,
                 "threat_level": _as_str(item.get("threat_level"), "high").lower(),
+                "food_tier": rival_food_tier or item.get("food_tier"),
+                "peer_scale": rival_scale,
             }
         )
 
     scored.sort(key=lambda row: float(row.get("overlap_score") or 0), reverse=True)
     return scored[: max(1, limit)]
+
+
+def _brand_guess_from_host(website: str | None) -> str:
+    """creative-sols.com → Creative Sols; skip generic hosts."""
+    host = _domain_of(website or "")
+    if not host:
+        return ""
+    core = host.split(".")[0]
+    skip = {
+        "www", "app", "apps", "blog", "shop", "store", "orders", "order", "menu",
+        "india", "pakistan", "saudi", "uae", "software", "company", "services",
+    }
+    if not core or core in skip or len(core) < 3:
+        return ""
+    # discretelogix → Discretelogix; creative-sols → Creative Sols
+    parts = re.split(r"[\-_]+", core)
+    nice = " ".join(p.capitalize() for p in parts if p)
+    return nice.strip()
 
 
 def _competitors_from_serp(organic: list[dict], client_name: str) -> list[dict]:
@@ -1747,6 +3185,7 @@ def _competitors_from_serp(organic: list[dict], client_name: str) -> list[dict]:
     skip_title_bits = (
         "vs ", " versus ", "alternative", "alternatives", "best ", "top ", "compared",
         "review", "pricing", "jobs", "career", "salary", "news", "blog",
+        "companies in ", "company in ", "developers in ", "agencies in ",
     )
     for item in organic or []:
         title = _as_str(item.get("title"))
@@ -1757,15 +3196,54 @@ def _competitors_from_serp(organic: list[dict], client_name: str) -> list[dict]:
         if _is_serp_noise_domain(link):
             continue
         name = title.split("|")[0].split("-")[0].split("–")[0].strip()
+        # Drop marketing suffixes: "Eastern Oven Your Go-To Pizza Haven..."
+        name = re.split(
+            r"\s+[–—|:]\s+|\s+-\s+(menu|order|delivery|reviews?)\b",
+            name,
+            maxsplit=1,
+            flags=re.I,
+        )[0].strip()
+        name = re.sub(
+            r"\s+(menu|order\s+now|online\s+ordering|delivery|lahore|karachi)\s*$",
+            "",
+            name,
+            flags=re.I,
+        ).strip()
+        # Strip geo SEO tails: "Creative Solutions … Company in Riyadh, Saudi Arabia"
+        name = re.sub(
+            r"\s+(software|web|it|digital)?\s*(development|developers?|services|solutions|company|companies|agency|house)?\s+in\s+[A-Za-z ,]+$",
+            "",
+            name,
+            flags=re.I,
+        ).strip()
+        name = _clean_rival_display_name(name)
+        # If title is still a category phrase, prefer the domain brand
+        if _is_generic_or_fake_rival_name(name) or len(name) > 55:
+            host_brand = _brand_guess_from_host(link)
+            if host_brand and not _is_generic_or_fake_rival_name(host_brand):
+                name = host_brand
+            else:
+                continue
         if not name or client_l in name.lower() or len(name) > 60:
             continue
-        if _is_generic_or_fake_rival_name(name):
+        if _is_self_rival(client_name, name, website=link):
+            continue
+        if _is_generic_or_fake_rival_name(name) or _looks_like_recipe_or_menu_item_name(name):
+            continue
+        if _looks_like_content_or_cpg_noise(name, link):
+            continue
+        if _looks_like_fmcg_or_snack_brand(name, snippet, link) or _looks_like_marketing_slogan_name(name):
+            continue
+        if _looks_like_invented_food_domain(name, link):
+            continue
+        if _is_global_food_franchise(name, link):
             continue
         lowered = name.lower()
         if any(bit in lowered for bit in skip_title_bits):
             continue
-        # Skip listicle-style titles that aren't company names
         if lowered.startswith(("the ", "how ", "what ", "why ", "10 ", "5 ", "7 ", "15 ")):
+            continue
+        if lowered.startswith(("authentic ", "delicious ", "homemade ", "easy ", "best homemade ")):
             continue
         if _is_global_megarival(name, link):
             continue
@@ -1778,9 +3256,10 @@ def _competitors_from_serp(organic: list[dict], client_name: str) -> list[dict]:
                 "website": _normalize_website(link.split("?")[0]),
                 "why_relevant": snippet[:220] or f"Appears in niche search for {client_name} competitors",
                 "threat_level": "medium",
-                # Conservative until enrich validates niche fit
-                "overlap_score": 52,
+                # High enough to survive local filter before enrich validates niche fit
+                "overlap_score": 62,
                 "same_niche": True,
+                "same_market": True,
                 "source": "serp",
             }
         )
@@ -1788,6 +3267,107 @@ def _competitors_from_serp(organic: list[dict], client_name: str) -> list[dict]:
             break
     return rivals
 
+
+async def _ai_propose_same_tier_peers(
+    db: AsyncSession,
+    agency_id: str,
+    client: ClientBrand,
+    *,
+    needed: int,
+    already_have: list[str],
+    scope: str,
+    market_focus: str,
+    business_model: str,
+    serp_candidates: list[dict] | None = None,
+) -> list[dict]:
+    """Ask the LLM for N more same-tier peer rivals (not seed lists)."""
+    needed = max(0, min(10, int(needed or 0)))
+    if needed <= 0:
+        return []
+    peer_scale = _peer_scale_from_blob(
+        client.name, client.niche, client.industry, business_model, name=client.name
+    )
+    is_food = _looks_like_food_client(client.name, client.niche, client.industry, business_model)
+    focus = _as_str(market_focus).strip() or "the client's primary market"
+    geo_block = (
+        (
+            f"Every rival MUST be headquartered in OR primarily selling in {focus}. "
+            f"headquarters_country must be {focus} (or a city inside it). "
+            "Omit any company from another country."
+        )
+        if scope == "local"
+        else "Prefer peers with genuine global/international reach in the same niche."
+    )
+    food_or_sw = (
+        "Only real food peers at the SAME scale AND SAME CATEGORY — never software houses. "
+        "CATEGORY RULE (hard): restaurant clients get restaurants only; cafe→cafes; bakery/cake shop→bakeries; "
+        "burger→burger; pizza→pizza; asian→asian. "
+        "Never pair a restaurant with a cake shop (e.g. Meet Me in Paris ≠ Layers Bakeshop). "
+        "Never return furniture/kitchen brands (e.g. Cucina as cabinets/furniture). "
+        "Never return Andiamo (Dubai Hyatt Italian) as a Pakistan local peer. "
+        "Never invent placeholder food brands (Pizza 24, Pizza 5, Pizza 360, Pizza 2 Go, Burger 99) "
+        "or fake matching domains (pizza24.pk). Only well-known REAL operating brands. "
+        "Never invent French placeholder names. Never return Xinyaki (typo) — Ginyaki is oriental, not a French restaurant peer."
+        if is_food
+        else "Only real commercial software houses / digital agencies / IT product peers — never food chains."
+    )
+    prompt = (
+        f"Fill exactly {needed} MORE real SAME-TIER peer competitors for this client. "
+        f"{geo_block} "
+        f"Must-match industry: {_as_str(client.industry) or 'unknown'}. "
+        f"Must-match niche: {_as_str(client.niche) or 'unknown'}. "
+        f"Must-match business model: {_as_str(business_model) or 'unknown'}. "
+        f"{_peer_scale_prompt_rule(peer_scale, is_food=is_food)} "
+        f"{food_or_sw} "
+        f"{_brand_geo_disclaimer(client.name, focus)} "
+        "Do NOT invent placeholder brands (TechCorp, Soft Solutions, PakTech, AxonSoft). "
+        "Do NOT pad with seed-list giants that dwarf the client. "
+        "Prefer well-known real peers customers would actually compare. "
+        "Return JSON: {competitors:[{name, website, industry, business_model, headquarters_country, "
+        "why_relevant, threat_level, overlap_score, same_niche:true, same_market:true, is_global_platform:false}]}. "
+        f"Return exactly {needed} NEW names not in already_have. Each needs a real https website. "
+        f"Every why_relevant MUST explicitly mention {focus} (city/country) and how they sell there."
+    )
+    pack = await ai_service.structured_json(
+        db,
+        agency_id,
+        prompt,
+        json.dumps(
+            {
+                "name": client.name,
+                "website": client.website,
+                "industry": client.industry,
+                "niche": client.niche,
+                "market_area": focus,
+                "competitor_scope": scope,
+                "business_model": business_model,
+                "needed": needed,
+                "already_have": already_have[:40],
+                "serp_candidates": (serp_candidates or [])[:12],
+                "peer_scale": peer_scale,
+            }
+        )[:7000],
+        temperature=0.2,
+    )
+    rows = [c for c in (pack.get("competitors") or []) if isinstance(c, dict)] if isinstance(pack, dict) else []
+    food_tier = (
+        _food_tier_from_blob(client.name, client.niche, client.industry, business_model)
+        if is_food
+        else None
+    )
+    return _filter_niche_competitors(
+        rows,
+        client.name,
+        market_area=focus if scope == "local" else "",
+        niche=_as_str(client.niche),
+        industry=_as_str(client.industry),
+        business_model=_as_str(business_model),
+        min_overlap=55.0,
+        limit=max(needed * 2, needed),
+        require_local_market=(scope == "local"),
+        client_food_tier=food_tier,
+        client_peer_scale=peer_scale,
+    )
 
 
 async def enrich_client_profile(
@@ -1808,6 +3388,9 @@ async def enrich_client_profile(
 
     site = {}
     if client.website:
+        cleaned = _normalize_website(client.website)
+        if cleaned and cleaned != client.website:
+            client.website = cleaned
         site = await scrape_website(db, agency.id, client.website)
     site_md = (site.get("markdown") or "")[:4500]
 
@@ -1861,27 +3444,74 @@ async def enrich_client_profile(
             temperature=0.15,
         )
 
-    client.industry = _as_str(profile.get("industry")) or client.industry or "Software"
+    # Never default food brands to "Software" — that pulls NetSol/Systems-style Serp + AI fill
+    default_industry = "Restaurant" if _looks_like_food_client(client.name, client.website, site_md[:800]) else "Software"
+    client.industry = _as_str(profile.get("industry")) or client.industry or default_industry
     client.niche = _as_str(profile.get("niche")) or client.niche
     if _looks_like_food_client(client.name, client.website, site_md[:800]):
         industry_l = _as_str(client.industry).lower()
         niche_l = _as_str(client.niche).lower()
+        name_blob = f"{client.name} {site_md[:800]}".lower()
         misprofiled = (
             "snack" in industry_l
             or "snack" in niche_l
             or ("cheese" in industry_l and "pizza" not in industry_l)
             or ("cheese" in niche_l and "pizza" not in niche_l)
+            or "software" in industry_l
+            or "technology" in industry_l
             or not _looks_like_food_client(client.industry, client.niche)
         )
         if misprofiled:
-            client.industry = "Fast food"
+            client.industry = "Restaurant"
+            if any(tok in name_blob for tok in ("shawarma", "shwarma", "doner", "kebab", "kabab")):
+                client.niche = "shawarma / quick-service restaurant"
+            elif any(tok in name_blob for tok in ("bakery", "patisserie", "pastry", "dessert", "cake")):
+                client.industry = "Bakery"
+                client.niche = "bakery / desserts"
+            elif any(tok in name_blob for tok in ("cafe", "café", "coffee")) and "restaurant" not in name_blob:
+                client.industry = "Cafe"
+                client.niche = "cafe"
+            elif "burger" in name_blob:
+                client.niche = "burgers / quick-service restaurant"
+            elif any(tok in name_blob for tok in ("pizza", "cheezious")) or _food_format_from_blob(
+                client.name, name_blob
+            ) == _FOOD_FORMAT_PIZZA:
+                client.niche = "pizza / quick-service restaurant"
+            elif any(tok in name_blob for tok in ("crepe", "crêpe", "paris", "baguette", "french")):
+                client.niche = "french casual dining / crepes"
+            else:
+                client.niche = "restaurant"
+        # Even when industry already looks food, force restaurant niche for Parisian dining brands
+        elif any(tok in name_blob for tok in ("meet me in paris",)) or (
+            "paris" in name_blob and not any(tok in name_blob for tok in ("pizza", "burger", "cake", "bakery"))
+        ):
+            client.industry = "Restaurant"
+            if not any(tok in niche_l for tok in ("restaurant", "crepe", "french", "dining")):
+                client.niche = "french casual dining / crepes"
+        # Known pizza brands: keep niche pizza even if AI said only "restaurant"
+        elif _food_format_from_blob(client.name, client.niche, client.industry) == _FOOD_FORMAT_PIZZA and "pizza" not in niche_l:
             client.niche = "pizza / quick-service restaurant"
     client.tagline = _as_str(profile.get("tagline")) or client.tagline
     market_area = _as_str(profile.get("market_area")) or _market_area_from_client(client)
     if market_area.strip().lower() in {"global", "worldwide", "international", "world"}:
         market_area = ""
+    # User-selected country ALWAYS wins for local runs (Saudi select → Saudi peers).
+    # Known-brand home market only corrects AI hallucinations when the user left country blank.
     if scope == "local" and country:
         market_area = country
+    else:
+        home = _known_brand_home_market(client.name, client.website)
+        if home:
+            ai_key = _normalize_country_key(market_area)
+            home_key = _normalize_country_key(home)
+            if not market_area or (ai_key and home_key and ai_key != home_key):
+                logger.info(
+                    "Overriding AI market_area=%r → %s for known brand %s (no user country selected)",
+                    market_area,
+                    home,
+                    client.name,
+                )
+                market_area = home
     business_model = _as_str(profile.get("business_model")) or _business_model_from_client(client) or "services"
     if _looks_like_food_client(client.name, client.industry, client.niche) and business_model.lower() in {
         "services",
@@ -1893,7 +3523,13 @@ async def enrich_client_profile(
         business_model = "other"
     description = _as_str(profile.get("description"))
     if description:
-        client.notes = description
+        # Keep Market / Business model lines; replace free-text body
+        kept_meta = [
+            ln
+            for ln in _as_str(client.notes).splitlines()
+            if ln.lower().startswith("market:") or ln.lower().startswith("business model:")
+        ]
+        client.notes = ("\n".join(kept_meta + [description])).strip() or description
     _set_market_area(client, market_area)
     _set_business_model(client, business_model)
 
@@ -2010,62 +3646,147 @@ async def enrich_client_profile(
             "business_model": business_model,
         }
 
+    _is_food_client_prompt = _looks_like_food_client(client.name, client.niche, client.industry)
+    _food_fmt_prompt = (
+        _food_format_from_blob(client.name, client.niche, client.industry, business_model)
+        if _is_food_client_prompt
+        else ""
+    )
+    _food_peer_label = {
+        _FOOD_FORMAT_PIZZA: "pizza / QSR pizza chains",
+        _FOOD_FORMAT_SHAWARMA: "shawarma / wrap QSR brands",
+        _FOOD_FORMAT_BURGER: "burger QSR brands",
+        _FOOD_FORMAT_CAFE: "cafes / coffee shops",
+        _FOOD_FORMAT_BAKERY: "bakeries / dessert shops",
+        _FOOD_FORMAT_ASIAN: "asian restaurants",
+        _FOOD_FORMAT_RESTAURANT: "casual dining restaurants",
+    }.get(_food_fmt_prompt, "same-format food / restaurant brands")
+
     if scope == "global":
-        competitor_prompt = (
-            f"Find exactly {count} REAL direct competitors for this company with GLOBAL / international reach. "
-            "They must compete in the SAME niche, SAME industry, and similar business model / buyer. "
-            f"Must-match industry: {_as_str(client.industry) or 'unknown'}. "
-            f"Must-match niche: {_as_str(client.niche) or 'unknown'}. "
-            f"Must-match business model: {_as_str(business_model) or 'unknown'}. "
-            f"Return JSON: {{competitors:[{'{'}name, website, industry, business_model, why_relevant, threat_level, overlap_score, "
-            "same_niche:true, same_market:true, market_overlap, is_global_platform:false{'}'}]}}. "
-            "Hard rules:\n"
-            f"1) Return exactly {count} NEW competitors — not names in already_have.\n"
-            "2) Only peer businesses selling a similar product/service to similar buyers — not adjacent tools.\n"
-            "3) EXCLUDE directories, review sites, job boards, news articles, and hyperscaler platforms "
-            "(AWS/Azure/GCP as clouds, Dialogflow as a raw API) unless they are a true peer product.\n"
-            "4) why_relevant must cite industry + niche + buyer overlap.\n"
-            "5) overlap_score should reflect true peer fit (prefer 60-95). Reject weak/tangential names.\n"
-            "6) Only include companies you believe actually exist with real websites. "
-            "Never invent placeholder brands like TechCorp, Soft Solutions, PakTech Solutions, AxonSoft."
-        )
+        if _is_food_client_prompt:
+            competitor_prompt = (
+                f"Find exactly {count} REAL international food competitors for this brand. "
+                f"They must be {_food_peer_label} — same food format, similar scale. "
+                f"Must-match industry: {_as_str(client.industry) or 'Restaurant'}. "
+                f"Must-match niche: {_as_str(client.niche) or 'food'}. "
+                f"Return JSON: {{competitors:[{'{'}name, website, industry, business_model, why_relevant, threat_level, overlap_score, "
+                "same_niche:true, same_market:true, market_overlap, is_global_platform:false{'}'}]}}. "
+                "Hard rules:\n"
+                f"1) Return exactly {count} NEW competitors — not names in already_have.\n"
+                f"2) ONLY {_food_peer_label}. NEVER software houses, IT firms, FMCG snack makers, or agencies.\n"
+                "3) Prefer real restaurant / QSR chains with working websites.\n"
+                "4) EXCLUDE directories, Foodpanda, Tripadvisor, blogs, and recipe pages.\n"
+                "5) overlap_score prefer 60-95 for true peer fit.\n"
+                "6) Never invent placeholder brands.\n"
+                f"7) {_peer_scale_prompt_rule(_peer_scale_from_blob(client.name, client.niche, client.industry, business_model, name=client.name), is_food=True)}."
+            )
+        else:
+            competitor_prompt = (
+                f"Find exactly {count} REAL direct competitors for this company with GLOBAL / international reach. "
+                "They must compete in the SAME niche, SAME industry, and similar business model / buyer. "
+                f"Must-match industry: {_as_str(client.industry) or 'unknown'}. "
+                f"Must-match niche: {_as_str(client.niche) or 'unknown'}. "
+                f"Must-match business model: {_as_str(business_model) or 'unknown'}. "
+                f"Return JSON: {{competitors:[{'{'}name, website, industry, business_model, why_relevant, threat_level, overlap_score, "
+                "same_niche:true, same_market:true, market_overlap, is_global_platform:false{'}'}]}}. "
+                "Hard rules:\n"
+                f"1) Return exactly {count} NEW competitors — not names in already_have.\n"
+                "2) Only peer businesses selling a similar product/service to similar buyers — not adjacent tools.\n"
+                "3) EXCLUDE directories, review sites, job boards, news articles, and hyperscaler platforms "
+                "(AWS/Azure/GCP as clouds, Dialogflow as a raw API) unless they are a true peer product.\n"
+                "4) why_relevant must cite industry + niche + buyer overlap.\n"
+                "5) overlap_score should reflect true peer fit (prefer 60-95). Reject weak/tangential names.\n"
+                "6) Only include companies you believe actually exist with real websites. "
+                "Never invent placeholder brands like TechCorp, Soft Solutions, PakTech Solutions, AxonSoft.\n"
+                f"7) {_peer_scale_prompt_rule(_peer_scale_from_blob(client.name, client.niche, client.industry, business_model, name=client.name), is_food=False)}."
+                + (
+                    f" 8) {_brand_geo_disclaimer(client.name, country or market_area or 'the selected market')}"
+                    if _brand_geo_disclaimer(client.name, country or market_area or "")
+                    else ""
+                )
+            )
     else:
         focus = country or market_area or "the client's primary country/region"
-        competitor_prompt = (
-            f"Find exactly {count} REAL direct LOCAL / country competitors for this company in {focus}. "
-            f"HARD GEO RULE: every competitor MUST be headquartered in OR primarily selling in {focus}. "
-            f"Do NOT return companies from other countries (e.g. if focus is Pakistan, exclude India, Singapore, UAE, US, UK rivals). "
-            "They must be from the SAME niche, SAME industry, SAME business model, and the SAME country/market. "
-            f"Must-match industry: {_as_str(client.industry) or 'unknown'}. "
-            f"Must-match niche: {_as_str(client.niche) or 'unknown'}. "
-            f"Must-match business model: {_as_str(business_model) or 'unknown'}. "
-            f"Return JSON: {{competitors:[{'{'}name, website, industry, business_model, headquarters_country, why_relevant, threat_level, overlap_score, "
-            "same_niche:true, same_market:true, market_overlap, is_global_platform:false{'}'}]}}. "
-            "Hard rules:\n"
-            f"1) Return exactly {count} NEW competitors — not names in already_have.\n"
-            f"2) headquarters_country MUST be {focus} (or a city inside {focus}).\n"
-            f"3) why_relevant MUST mention {focus} and how they sell there.\n"
-            f"4) website MUST be a real working company homepage URL (https://...). No invented domains.\n"
-            "5) EXCLUDE consumer shopping / ecommerce retailers / marketplaces "
-            "(Daraz, Telemart, Amazon-style stores) unless the client itself is retail ecommerce.\n"
-            "6) EXCLUDE fintech wallets, payment apps, banks, and remittance apps "
-            "(NayaPay, EasyPaisa, JazzCash, SadaPay) unless the client itself is fintech/payments.\n"
-            "7) EXCLUDE government boards, ministries, regulators, and public-sector IT bodies "
-            "(PITB, NADRA, ministries, authorities) — they are not commercial software-house rivals.\n"
-            "8) EXCLUDE global hyperscalers and mega consultancies "
-            "(Accenture, IBM, Microsoft, Google, Amazon/AWS, Oracle, SAP, Deloitte, PwC, EY, KPMG, Cognizant, Infosys, TCS, Wipro, OpenAI).\n"
-            "9) EXCLUDE directories, review sites, and tools/infrastructure that are not peer businesses.\n"
-            f"10) If you are unsure a company is based in / sells primarily in {focus}, OMIT it.\n"
-            "11) Same 'Technology' industry is NOT enough — they must sell a similar product/service to similar buyers.\n"
-            "12) Prefer commercial software houses / digital agencies / IT services firms as peers for a software house client.\n"
-            "13) NEVER invent placeholder brands (TechCorp, Soft Solutions, SoftCorp, PakTech Solutions, AxonSoft, IT Solutions). "
-            "Only well-known or clearly real companies with working websites.\n"
-            "14) overlap_score should reflect true peer fit (prefer 60-95).\n"
-            "15) Only include companies you believe actually exist."
+        _client_scale = _peer_scale_from_blob(
+            client.name, client.niche, client.industry, business_model, name=client.name
         )
+        if _is_food_client_prompt:
+            competitor_prompt = (
+                f"Find exactly {count} REAL LOCAL food competitors for this brand in {focus}. "
+                f"HARD GEO RULE: every rival MUST operate primarily in {focus}. "
+                f"They must be {_food_peer_label} — same food format as the client. "
+                f"Must-match industry: {_as_str(client.industry) or 'Restaurant'}. "
+                f"Must-match niche: {_as_str(client.niche) or 'food'}. "
+                f"Return JSON: {{competitors:[{'{'}name, website, industry, business_model, headquarters_country, why_relevant, threat_level, overlap_score, "
+                "same_niche:true, same_market:true, market_overlap, is_global_platform:false{'}'}]}}. "
+                "Hard rules:\n"
+                f"1) Return exactly {count} NEW competitors — not names in already_have.\n"
+                f"2) headquarters_country MUST be {focus} (or a city inside {focus}).\n"
+                f"3) ONLY {_food_peer_label}. NEVER software houses (NetSol, Systems Limited, 10Pearls), "
+                "IT agencies, FMCG snack companies (Unilever, PepsiCo), or non-food brands.\n"
+                f"4) why_relevant MUST mention {focus} and how they compete for the same diners/delivery buyers.\n"
+                "5) website MUST be a real restaurant / QSR homepage (https://...).\n"
+                "6) EXCLUDE Foodpanda, Tripadvisor, Instagram, blogs, recipe pages, and directories.\n"
+                f"7) If unsure a brand is a real {_food_peer_label} in {focus}, OMIT it.\n"
+                "8) Never invent placeholder brands.\n"
+                "9) overlap_score prefer 60-95.\n"
+                f"10) {_peer_scale_prompt_rule(_client_scale, is_food=True)}"
+                + (
+                    f"\n11) {_brand_geo_disclaimer(client.name, focus)}"
+                    if _brand_geo_disclaimer(client.name, focus)
+                    else ""
+                )
+            )
+        else:
+            competitor_prompt = (
+                f"Find exactly {count} REAL direct LOCAL / country competitors for this company in {focus}. "
+                f"HARD GEO RULE: every competitor MUST be headquartered in OR primarily selling in {focus}. "
+                f"Do NOT return companies from other countries (e.g. if focus is Pakistan, exclude India, Singapore, UAE, US, UK rivals). "
+                "They must be from the SAME niche, SAME industry, SAME business model, and the SAME country/market. "
+                f"Must-match industry: {_as_str(client.industry) or 'unknown'}. "
+                f"Must-match niche: {_as_str(client.niche) or 'unknown'}. "
+                f"Must-match business model: {_as_str(business_model) or 'unknown'}. "
+                f"Return JSON: {{competitors:[{'{'}name, website, industry, business_model, headquarters_country, why_relevant, threat_level, overlap_score, "
+                "same_niche:true, same_market:true, market_overlap, is_global_platform:false{'}'}]}}. "
+                "Hard rules:\n"
+                f"1) Return exactly {count} NEW competitors — not names in already_have.\n"
+                f"2) headquarters_country MUST be {focus} (or a city inside {focus}).\n"
+                f"3) why_relevant MUST mention {focus} and how they sell there.\n"
+                f"4) website MUST be a real working company homepage URL (https://...). No invented domains.\n"
+                "5) EXCLUDE consumer shopping / ecommerce retailers / marketplaces "
+                "(Daraz, Telemart, Amazon-style stores) unless the client itself is retail ecommerce.\n"
+                "6) EXCLUDE fintech wallets, payment apps, banks, and remittance apps "
+                "(NayaPay, EasyPaisa, JazzCash, SadaPay) unless the client itself is fintech/payments.\n"
+                "7) EXCLUDE government boards, ministries, regulators, and public-sector IT bodies "
+                "(PITB, NADRA, ministries, authorities) — they are not commercial software-house rivals.\n"
+                "8) EXCLUDE global hyperscalers and mega consultancies "
+                "(Accenture, IBM, Microsoft, Google, Amazon/AWS, Oracle, SAP, Deloitte, PwC, EY, KPMG, Cognizant, Infosys, TCS, Wipro, OpenAI).\n"
+                "9) EXCLUDE directories, review sites, and tools/infrastructure that are not peer businesses.\n"
+                f"10) If you are unsure a company is based in / sells primarily in {focus}, OMIT it.\n"
+                "11) Same 'Technology' industry is NOT enough — they must sell a similar product/service to similar buyers.\n"
+                "12) Prefer commercial software houses / digital agencies / IT services firms as peers for a software house client.\n"
+                "13) NEVER invent placeholder brands (TechCorp, Soft Solutions, SoftCorp, PakTech Solutions, AxonSoft, IT Solutions). "
+                "Only well-known or clearly real companies with working websites.\n"
+                "14) overlap_score should reflect true peer fit (prefer 60-95).\n"
+                "15) Only include companies you believe actually exist.\n"
+                f"16) {_peer_scale_prompt_rule(_client_scale, is_food=False)}"
+                + (
+                    f"\n17) {_brand_geo_disclaimer(client.name, focus)}"
+                    if _brand_geo_disclaimer(client.name, focus)
+                    else ""
+                )
+            )
 
     def _apply_relevance_filter(rows: list[dict]) -> list[dict]:
         local_market = (country or market_area) if scope == "local" else ""
+        food_tier = (
+            _food_tier_from_blob(client.name, client.niche, client.industry, business_model)
+            if _looks_like_food_client(client.name, client.niche, client.industry, business_model)
+            else None
+        )
+        peer_scale = _peer_scale_from_blob(
+            client.name, client.niche, client.industry, business_model, name=client.name
+        )
         return _filter_niche_competitors(
             rows,
             client.name,
@@ -2076,85 +3797,66 @@ async def enrich_client_profile(
             min_overlap=55.0,
             limit=max(count * 2, 10),
             require_local_market=(scope == "local"),
+            client_food_tier=food_tier,
+            client_peer_scale=peer_scale,
         )
 
     competitor_items: list[dict] = []
     local_focus = country or market_area or ""
     serp_auth_failed = False
 
-    # SERP-first for local runs — reduces LLM-invented brands like TechCorp / Soft Solutions
-    serp_budget = 6 if scope == "local" else 3
-    for query in _niche_competitor_queries(client, local_focus if scope == "local" else (country or market_area or ""))[:serp_budget]:
+    # SERP-first — stop early on auth failure; keep query budget tight for speed
+    # Food/local (esp. add-mode) needs more queries when AI/TPM is thin
+    serp_budget = 2 if scope == "global" else (5 if _looks_like_food_client(
+        client.name, client.niche, client.industry, business_model
+    ) else 3)
+    serp_market = local_focus if scope == "local" else ""
+    for query in _niche_competitor_queries(client, serp_market, scope=scope)[:serp_budget]:
         if scope == "local" and local_focus and local_focus.lower() not in query.lower():
             query = f"{query} {local_focus}"
-        elif scope == "global":
-            query = f"{query} global competitors"
         serp = await serp_visibility(
             db,
             agency.id,
             query,
-            location=local_focus if scope == "local" else None,
+            location=_serp_location_for_market(local_focus) if scope == "local" else None,
             gl=_serp_gl_for_market(local_focus) if scope == "local" else None,
         )
         status = _as_str(serp.get("status")).lower()
         detail_l = _as_str(serp.get("detail")).lower()
         if status == "unauthorized" or "unauthorized" in detail_l or "invalid api key" in detail_l:
             serp_auth_failed = True
+            logger.warning(
+                "SerpAPI unauthorized for agency=%s — skipping remaining SERP queries, AI will fill peers",
+                agency.id,
+            )
+            break
+        if status in {"error", "skipped"} and not (serp.get("organic") or []):
+            # Don't burn the full budget on repeated empty/error SERP calls
+            if status == "error":
+                logger.warning("SerpAPI error for agency=%s — stopping SERP loop early", agency.id)
+                break
         competitor_items.extend(_competitors_from_serp(serp.get("organic") or [], client.name))
         competitor_items = _apply_relevance_filter(competitor_items)
-        if len(competitor_items) >= max(count, 4):
+        if len(competitor_items) >= count:
             break
 
-    # Seed only matching verticals. Never dump software-house peers onto restaurants, etc.
-    client_blob = f"{client.industry} {client.niche} {business_model} {client.name} {client.website} {site_md[:1200]}".lower()
-    is_software_peer_client = _looks_like_software_peer_client(client_blob)
-    is_food_client = _looks_like_food_client(client_blob)
-    seed_when_thin = len(competitor_items) < max(count, 5)
-    if is_software_peer_client and (seed_when_thin or (scope == "local" and local_focus)):
-        already = already_have_names + [_as_str(c.get("name")) for c in competitor_items]
-        if scope == "local" and local_focus:
-            competitor_items.extend(
-                _seed_local_software_rivals(
-                    local_focus,
-                    client.name,
-                    already_have=already,
-                    client_website=client.website,
-                    limit=max(count * 3, 15),
-                )
-            )
-        elif seed_when_thin:
-            competitor_items.extend(
-                _seed_global_software_rivals(
-                    client.name,
-                    already_have=already,
-                    limit=max(count * 2, 8),
-                )
-            )
-        competitor_items = _apply_relevance_filter(competitor_items)
-        if serp_auth_failed:
-            logger.warning(
-                "SerpAPI unauthorized for agency=%s — using curated %s software-house seeds",
-                agency.id,
-                local_focus if scope == "local" else "global",
-            )
-    elif is_food_client and seed_when_thin and scope == "local" and local_focus:
-        already = already_have_names + [_as_str(c.get("name")) for c in competitor_items]
-        competitor_items.extend(
-            _seed_local_qsr_rivals(
-                local_focus,
-                client.name,
-                already_have=already,
-                client_website=client.website,
-                limit=max(count * 3, 12),
-            )
+    logger.info(
+        "SERP discovery client=%s scope=%s market=%s queries_budget=%s serp_hits=%s auth_failed=%s",
+        client.id,
+        scope,
+        local_focus or "(global)",
+        serp_budget,
+        len(competitor_items),
+        serp_auth_failed,
+    )
+
+    # Vertical flags unused for seed lists — gap-fill is AI-only now
+    if serp_auth_failed:
+        logger.info(
+            "Competitor discovery will use AI same-tier fill for agency=%s client=%s (SERP unavailable)",
+            agency.id,
+            client.id,
         )
-        competitor_items = _apply_relevance_filter(competitor_items)
-        if serp_auth_failed:
-            logger.warning(
-                "SerpAPI unauthorized for agency=%s — using curated %s QSR seeds",
-                agency.id,
-                local_focus,
-            )
 
     # AI ranks/fills — prefer choosing from SERP candidates when available
     serp_names = [_as_str(c.get("name")) for c in competitor_items if _as_str(c.get("name"))]
@@ -2191,113 +3893,185 @@ async def enrich_client_profile(
         competitor_items.extend([c for c in competitor_pack["competitors"] if isinstance(c, dict)])
     competitor_items = _apply_relevance_filter(competitor_items)
 
-    # Prefer keeping at least `count` candidates before AI can shrink the pool
-    if is_software_peer_client and len(competitor_items) < count:
+    # Gap-fill remaining slots with same-tier AI peers (NOT curated seed lists)
+    if len(competitor_items) < count:
         already = already_have_names + [_as_str(c.get("name")) for c in competitor_items]
-        if scope == "local" and local_focus:
-            competitor_items.extend(
-                _seed_local_software_rivals(
-                    local_focus,
-                    client.name,
-                    already_have=already,
-                    client_website=client.website,
-                    limit=max(count * 2, 8),
-                )
-            )
-        else:
-            competitor_items.extend(
-                _seed_global_software_rivals(
-                    client.name,
-                    already_have=already,
-                    limit=max(count * 2, 8),
-                )
-            )
-        competitor_items = _apply_relevance_filter(competitor_items)
-    elif is_food_client and len(competitor_items) < count and scope == "local" and local_focus:
-        already = already_have_names + [_as_str(c.get("name")) for c in competitor_items]
-        competitor_items.extend(
-            _seed_local_qsr_rivals(
-                local_focus,
-                client.name,
-                already_have=already,
-                client_website=client.website,
-                limit=max(count * 2, 8),
-            )
-        )
-        competitor_items = _apply_relevance_filter(competitor_items)
-
-    min_needed = max(1, min(count, 4))
-    if len(competitor_items) < min_needed:
-        retry_pack = await ai_service.structured_json(
+        fill_rows = await _ai_propose_same_tier_peers(
             db,
             agency.id,
-            (
-                f"Propose exactly {count} REAL niche peer competitors "
-                + (
-                    f"headquartered in {country or market_area or 'the local market'} only. "
-                    f"Exclude any company based in a different country. "
-                    f"Each must include headquarters_country={country or market_area} and a real https website. "
-                    "Do NOT invent TechCorp/Soft Solutions/PakTech-style placeholder names."
-                    if scope == "local"
-                    else "with global/international reach. Do not invent placeholder brands."
-                )
-                + " They MUST match the client's industry, niche, and business model. "
-                + "Return JSON {competitors:[{name, website, industry, business_model, headquarters_country, why_relevant, threat_level, overlap_score, same_niche:true, same_market:true}]}. "
-                + (
-                    "Only real local pizza / burger / QSR food chains. Never software houses."
-                    if is_food_client
-                    else "No Fortune-500 mega-platforms. Only real local software houses / digital agencies / IT services firms."
-                    if scope == "local"
-                    else "Prefer known international category peers."
-                )
-            ),
-            json.dumps(
-                {
-                    "name": client.name,
-                    "niche": client.niche,
-                    "industry": client.industry,
-                    "market_area": market_area,
-                    "competitor_scope": scope,
-                    "competitor_country": country or None,
-                    "competitor_count": count,
-                    "business_model": business_model,
-                    "already_have": [c.get("name") for c in competitor_items] + already_have_names,
-                    "serp_candidates": serp_names[:12],
-                }
-            ),
-            temperature=0.2,
+            client,
+            needed=count - len(competitor_items),
+            already_have=already,
+            scope=scope,
+            market_focus=(local_focus or market_area or country) if scope == "local" else "global / international",
+            business_model=business_model,
+            serp_candidates=competitor_items[:12],
         )
-        if isinstance(retry_pack.get("competitors"), list):
-            competitor_items.extend([c for c in retry_pack["competitors"] if isinstance(c, dict)])
+        competitor_items.extend(fill_rows)
         competitor_items = _apply_relevance_filter(competitor_items)
+
+    # Second AI pass if still short of the slider count (not capped at 4)
+    if len(competitor_items) < count:
+        fill_rows = await _ai_propose_same_tier_peers(
+            db,
+            agency.id,
+            client,
+            needed=count - len(competitor_items),
+            already_have=already_have_names + [_as_str(c.get("name")) for c in competitor_items],
+            scope=scope,
+            market_focus=(local_focus or market_area or country) if scope == "local" else "global / international",
+            business_model=business_model,
+            serp_candidates=competitor_items[:12],
+        )
+        competitor_items.extend(fill_rows)
+        competitor_items = _apply_relevance_filter(competitor_items)
+
+    # Last resort for food/local when SerpAPI is down and AI returned nothing usable
+    is_food_client = _looks_like_food_client(
+        client.name, client.industry, client.niche, business_model, site_md[:800]
+    )
+    if (
+        is_food_client
+        and scope == "local"
+        and local_focus
+        and len(competitor_items) < count
+    ):
+        already = already_have_names + [_as_str(c.get("name")) for c in competitor_items]
+        food_tier = _food_tier_from_blob(client.name, client.niche, client.industry, business_model)
+        seed_rows = _seed_local_qsr_rivals(
+            local_focus,
+            client.name,
+            already_have=already,
+            client_website=client.website,
+            client_tier=food_tier,
+            client_niche=_as_str(client.niche),
+            client_industry=_as_str(client.industry),
+            limit=max(count * 2, 8),
+        )
+        competitor_items.extend(seed_rows)
+        competitor_items = _apply_relevance_filter(competitor_items)
+        logger.warning(
+            "Food/local last-resort peers used for client=%s market=%s (SERP/AI thin) kept=%s",
+            client.id,
+            local_focus,
+            len(competitor_items),
+        )
 
     existing = (
         await db.execute(select(Competitor).where(Competitor.client_id == client.id, Competitor.agency_id == agency.id))
     ).scalars().all()
     by_name = {_as_str(c.name).lower(): c for c in existing}
 
-    # Keep existing/manual rivals — boost + pin so they survive AI prune & count slices.
+    # Keep existing/manual rivals — boost so they survive AI prune & count slices.
     # replace: only pinned/manual stay; auto-found were already untracked above.
+    # Never auto-pin: that trapped AI hallucinations (Paris Café etc.) forever.
     protected_existing = (
         [c for c in existing if c.is_pinned]
         if mode == "replace"
         else [c for c in existing if c.is_tracking or c.is_pinned]
     )
-    for competitor in protected_existing:
-        looks_manual = (competitor.overlap_score or 0) < 55 or not (competitor.feature_list or [])
+    scope_market = (country or market_area) if scope == "local" else (country or market_area or "")
+    client_kind_for_protect = (
+        f"{client.name} {client.industry or ''} {client.niche or ''} "
+        f"{business_model} {client.notes or ''} {client.tagline or ''}"
+    )
+    for competitor in list(protected_existing):
+        # Drop brand-geo fakes even if previously auto-pinned
+        cleaned_name = _clean_rival_display_name(_as_str(competitor.name))
+        if cleaned_name and cleaned_name != competitor.name and not competitor.is_pinned:
+            competitor.name = cleaned_name
+        if (not competitor.is_pinned) and (
+            _looks_like_recipe_or_menu_item_name(competitor.name)
+            or _looks_like_content_or_cpg_noise(competitor.name, competitor.website)
+            or _looks_like_marketing_slogan_name(competitor.name)
+            or _is_generic_or_fake_rival_name(competitor.name)
+        ):
+            competitor.is_tracking = False
+            competitor.is_pinned = False
+            continue
+        # Sticky wrong-vertical peers (e.g. NetSol on a pizza brand) must not stay protected
+        if (not competitor.is_pinned) and _incompatible_peer(
+            client_model=business_model,
+            client_industry=_as_str(client.industry),
+            client_niche=_as_str(client.niche) or _as_str(client.notes),
+            rival_model="",
+            rival_industry="",
+            rival_blob=f"{competitor.name} {competitor.description or ''} {competitor.why_dangerous or ''}",
+            client_name=client.name,
+        ):
+            competitor.is_tracking = False
+            competitor.is_pinned = False
+            continue
+        if (not competitor.is_pinned) and _looks_like_food_client(client_kind_for_protect) and (
+            _looks_like_software_peer_client(
+                competitor.name, competitor.description, competitor.why_dangerous, competitor.website
+            )
+            or _looks_like_fmcg_or_snack_brand(
+                competitor.name, competitor.description, competitor.why_dangerous, competitor.website
+            )
+        ):
+            competitor.is_tracking = False
+            competitor.is_pinned = False
+            continue
+        # add = keep-current promise: do NOT drop existing for new country / global scope
+        if mode != "add" and not _rival_fits_run_scope(
+            name=_as_str(competitor.name),
+            website=competitor.website,
+            headquarters=competitor.headquarters,
+            description=competitor.description,
+            why=competitor.why_dangerous,
+            scope=scope,
+            market=scope_market,
+            client_name=client.name,
+            is_pinned=False,
+            strict=False,
+        ):
+            competitor.is_tracking = False
+            competitor.is_pinned = False
+            continue
         competitor.is_tracking = True
         if (competitor.overlap_score or 0) < 55:
             competitor.overlap_score = 70.0
         if not competitor.threat_level or competitor.threat_level == "low":
             competitor.threat_level = "medium"
-        if looks_manual or competitor.is_pinned:
-            competitor.is_pinned = True
         if not competitor.why_dangerous:
             competitor.why_dangerous = f"Existing rival kept for {client.name}"
 
     pruned_global = 0
     for competitor in existing:
-        # Never auto-drop pinned (manual) rivals
+        # add mode: never wipe previous list for geo/scope — only replace/update re-scope
+        if mode == "add" and (competitor.is_tracking or competitor.is_pinned):
+            continue
+        if competitor.is_pinned and _rival_fits_run_scope(
+            name=_as_str(competitor.name),
+            website=competitor.website,
+            headquarters=competitor.headquarters,
+            description=competitor.description,
+            why=competitor.why_dangerous,
+            scope=scope,
+            market=scope_market,
+            client_name=client.name,
+            is_pinned=False,
+            strict=False,
+        ):
+            continue
+        # Brand-geo / out-of-scope: unpin + untrack (pin must not protect hallucinations)
+        if not _rival_fits_run_scope(
+            name=_as_str(competitor.name),
+            website=competitor.website,
+            headquarters=competitor.headquarters,
+            description=competitor.description,
+            why=competitor.why_dangerous,
+            scope=scope,
+            market=scope_market,
+            client_name=client.name,
+            is_pinned=False,
+            strict=False,
+        ):
+            competitor.is_tracking = False
+            competitor.is_pinned = False
+            pruned_global += 1
+            continue
         if competitor.is_pinned:
             continue
         if mode == "replace":
@@ -2317,33 +4091,101 @@ async def enrich_client_profile(
         if mode == "replace" and not row.is_pinned:
             continue
         existing_keys |= _rival_keys(row.name, row.website)
-    fresh_items = []
-    seen_fresh: set[str] = set()
-    for c in competitor_items:
-        if not isinstance(c, dict):
-            continue
-        name = _as_str(c.get("name")).strip()
-        website = _normalize_website(_as_str(c.get("website")) or None)
-        item_keys = _rival_keys(name, website)
-        if not name or not item_keys or item_keys & existing_keys or item_keys & seen_fresh:
-            continue
-        if _is_generic_or_fake_rival_name(name) and _as_str(c.get("source")).lower() != "seed":
-            continue
-        if not website:
-            continue
-        seen_fresh |= item_keys
-        fresh_items.append(c)
-        if len(fresh_items) >= ai_slots:
-            break
+
+    def _pick_fresh(items: list) -> list[dict]:
+        fresh: list[dict] = []
+        seen: set[str] = set()
+        for c in items:
+            if not isinstance(c, dict):
+                continue
+            name = _clean_rival_display_name(_as_str(c.get("name")).strip())
+            website = _normalize_website(_as_str(c.get("website")) or None)
+            item_keys = _rival_keys(name, website)
+            if not name or not item_keys or item_keys & existing_keys or item_keys & seen:
+                continue
+            if _is_generic_or_fake_rival_name(name):
+                # Seeds are curated; still drop recipe/SEO titles if a seed name was polluted
+                if _as_str(c.get("source")).lower() != "seed" or _looks_like_recipe_or_menu_item_name(name):
+                    continue
+            if _looks_like_content_or_cpg_noise(name, website):
+                continue
+            if _is_self_rival(client.name, name, website=website, client_website=client.website):
+                continue
+            if _looks_like_brand_geo_hallucination(
+                client.name,
+                name,
+                local_focus or market_area or country,
+                website=website,
+                source=_as_str(c.get("source")) or "ai",
+            ):
+                continue
+            if not _rival_fits_run_scope(
+                name=name,
+                website=website,
+                headquarters=_as_str(c.get("headquarters_country") or c.get("headquarters")),
+                description=_as_str(c.get("why_relevant") or c.get("description")),
+                why=_as_str(c.get("why_relevant")),
+                scope=scope,
+                market=(local_focus or market_area or country) if scope == "local" else (local_focus or ""),
+                client_name=client.name,
+                strict=False,
+            ):
+                continue
+            if not website:
+                continue
+            seen |= item_keys
+            c = {**c, "name": name}
+            fresh.append(c)
+            if len(fresh) >= ai_slots:
+                break
+        return fresh
+
+    fresh_items = _pick_fresh(competitor_items)
+    # If SERP/AI first pass left us short of the slider count, ask AI (+ seeds last) again
+    if len(fresh_items) < ai_slots:
+        already = already_have_names + [_as_str(c.get("name")) for c in fresh_items]
+        more = await _ai_propose_same_tier_peers(
+            db,
+            agency.id,
+            client,
+            needed=ai_slots - len(fresh_items),
+            already_have=already,
+            scope=scope,
+            market_focus=(local_focus or market_area or country) if scope == "local" else "global / international",
+            business_model=business_model,
+            serp_candidates=competitor_items[:12],
+        )
+        competitor_items.extend(more)
+        if (
+            len(_pick_fresh(competitor_items)) < ai_slots
+            and _looks_like_food_client(client.name, client.industry, client.niche, business_model)
+            and scope == "local"
+            and local_focus
+        ):
+            competitor_items.extend(
+                _seed_local_qsr_rivals(
+                    local_focus,
+                    client.name,
+                    already_have=already + [_as_str(c.get("name")) for c in more],
+                    client_website=client.website,
+                    client_tier=_food_tier_from_blob(client.name, client.niche, client.industry, business_model),
+                    client_niche=_as_str(client.niche),
+                    client_industry=_as_str(client.industry),
+                    limit=max(ai_slots * 2, 8),
+                )
+            )
+        fresh_items = _pick_fresh(competitor_items)
+
     deduped = fresh_items
 
     created_competitors = 0
     for item in deduped:
-        name = _as_str(item.get("name")).strip()
+        name = _clean_rival_display_name(_as_str(item.get("name")).strip())
         if not name:
             continue
-        if _is_generic_or_fake_rival_name(name) and _as_str(item.get("source")).lower() != "seed":
-            continue
+        if _is_generic_or_fake_rival_name(name):
+            if _as_str(item.get("source")).lower() != "seed" or _looks_like_recipe_or_menu_item_name(name):
+                continue
         why = _as_str(item.get("why_relevant"))
         threat = _as_str(item.get("threat_level"), "high").lower()
         try:
@@ -2353,9 +4195,13 @@ async def enrich_client_profile(
         website = _normalize_website(_as_str(item.get("website")) or None)
         if not website:
             continue
+        if _looks_like_content_or_cpg_noise(name, website):
+            continue
         competitor = _find_matching_competitor(existing, name, website)
         if competitor:
+            was_tracking = bool(competitor.is_tracking)
             # replace mode skips previously known names via existing_keys; this path is for add/re-enable
+            competitor.name = name
             competitor.website = website or competitor.website
             competitor.description = why or competitor.description
             competitor.why_dangerous = why or competitor.why_dangerous
@@ -2366,6 +4212,8 @@ async def enrich_client_profile(
                 competitor.threat_level = threat if threat in {"medium", "high"} else "high"
                 competitor.overlap_score = max(overlap, competitor.overlap_score or 0)
             competitor.is_tracking = True
+            if not was_tracking:
+                created_competitors += 1
         else:
             competitor = Competitor(
                 agency_id=agency.id,
@@ -2383,6 +4231,26 @@ async def enrich_client_profile(
             existing.append(competitor)
             created_competitors += 1
 
+    # Enforce this run's local/global filter on the tracked list (UI shows is_tracking only)
+    scope_market = (country or market_area) if scope == "local" else (country or market_area or "")
+    for rival in existing:
+        if rival.is_pinned:
+            continue
+        if not _rival_fits_run_scope(
+            name=_as_str(rival.name),
+            website=rival.website,
+            headquarters=rival.headquarters,
+            description=rival.description,
+            why=rival.why_dangerous,
+            scope=scope,
+            market=scope_market,
+            client_name=client.name,
+            is_pinned=False,
+            strict=False,
+        ):
+            rival.is_tracking = False
+            pruned_global += 1
+
     await db.flush()
     return {
         "features": len(feature_rows),
@@ -2392,6 +4260,7 @@ async def enrich_client_profile(
         "competitor_country": country or None,
         "competitors_kept_existing": len(protected_existing),
         "competitors_pruned_global": pruned_global,
+        "baseline_rival_names": list(already_have_names),
         "competitor_mode": mode,
         "goals": len(client.goals or []),
         "industry": client.industry,
@@ -2411,6 +4280,7 @@ async def run_competitive_pack(
     competitor_country: str | None = None,
     competitor_count: int = 5,
     competitor_mode: str = "add",
+    baseline_rival_names: list[str] | None = None,
 ) -> dict:
     count = max(1, min(10, int(competitor_count or 5)))
     raw_mode = str(competitor_mode or "add").strip().lower()
@@ -2436,8 +4306,9 @@ async def run_competitive_pack(
     ).scalars().all()
 
     # Standalone pack calls may still need an enrich when the client has no rivals yet.
+    baseline_names = [_as_str(n) for n in (baseline_rival_names or []) if _as_str(n)]
     if not features or not competitors:
-        await enrich_client_profile(
+        enrich_meta = await enrich_client_profile(
             db,
             agency,
             client,
@@ -2446,6 +4317,10 @@ async def run_competitive_pack(
             competitor_count=count,
             competitor_mode=mode if competitors else ("add" if mode == "update" else mode),
         )
+        if not baseline_names:
+            baseline_names = [
+                _as_str(n) for n in (enrich_meta.get("baseline_rival_names") or []) if _as_str(n)
+            ]
         features = (
             await db.execute(
                 select(ProductFeature).where(
@@ -2463,6 +4338,29 @@ async def run_competitive_pack(
                 )
             )
         ).scalars().all()
+
+    # Drop auto-tracked rivals that clearly don't match this run's local/global filter
+    scope_market = required_market if scope == "local" else (required_market or "")
+    for rival in competitors:
+        if not _rival_fits_run_scope(
+            name=_as_str(rival.name),
+            website=rival.website,
+            headquarters=rival.headquarters,
+            description=rival.description,
+            why=rival.why_dangerous,
+            scope=scope,
+            market=scope_market,
+            client_name=client.name,
+            is_pinned=False,
+            strict=False,
+        ):
+            rival.is_tracking = False
+            rival.is_pinned = False
+            continue
+        if rival.is_pinned:
+            continue
+    competitors = [c for c in competitors if c.is_tracking or c.is_pinned]
+    await db.flush()
 
     # update: refresh up to `count` existing. add: keep all tracked. replace: pinned + up to `count` fresh.
     pinned = [c for c in competitors if c.is_pinned]
@@ -2489,81 +4387,131 @@ async def run_competitive_pack(
                 "Could not extract product features for this client. Add a website, then run intel again "
                 "or add features manually."
             )
+        is_food = _looks_like_food_client(
+            client.name,
+            client.industry,
+            client.niche,
+            _business_model_from_client(client),
+            client.notes,
+            client.tagline,
+        )
+        peer_hint = (
+            _food_rival_peer_hint(
+                client.name, client.industry, client.niche, client.notes, client.tagline
+            )
+            if is_food
+            else "software-house / digital-agency rivals"
+            if _looks_like_software_peer_client(
+                client.name, client.industry, client.niche, _business_model_from_client(client)
+            )
+            else "same-industry peer rivals"
+        )
+        market_bit = f" in {required_market}" if scope == "local" and required_market else ""
         raise ValueError(
-            "No matching competitors survived quality filters. "
-            "SerpAPI search is unauthorized and Groq could not rank rivals — "
-            "update those keys under Integrations/BYOK, or add software-house rivals manually and pin them."
+            f"No matching {peer_hint} survived quality filters{market_bit}. "
+            "Platform search/AI could not rank true peers right now — "
+            "try again shortly, or add real rivals manually and pin them."
         )
 
     kept: list[Competitor] = []
     analyzed: list[Competitor] = []
-    for competitor in competitors:
+    # Snapshot BEFORE analyze — add mode must keep these names even if AI prune is harsh
+    baseline_set = {_as_str(n).lower().strip() for n in baseline_names if _as_str(n)}
+    if mode == "add" and not baseline_set:
+        baseline_set = {_as_str(c.name).lower().strip() for c in competitors if _as_str(c.name)}
+    for idx, competitor in enumerate(competitors):
         # Normalize stored website so UI links open correctly
         if competitor.website:
             competitor.website = _normalize_website(competitor.website) or competitor.website
         site_data = {}
-        if competitor.website:
+        # Skip slow re-scrapes when we already have usable rival intel; cap fresh scrapes for speed
+        already_enriched = bool(competitor.feature_list) and bool(
+            competitor.description or competitor.why_dangerous
+        )
+        if competitor.website and not already_enriched and idx < min(count, 3):
             site_data = await scrape_website(db, agency.id, competitor.website)
         site_md = (site_data.get("markdown") or "")[:3500]
-        analysis = await ai_service.structured_json(
-            db,
-            agency.id,
-            (
-                "Enrich a competitor for competitive intelligence against THIS client only. "
-                "Return JSON keys: tagline, description, headquarters, headquarters_country, industry, business_model, "
-                "overlap_score (0-100), threat_level (low|medium|high), is_leading_rival (boolean), "
-                "same_niche (boolean), same_market (boolean), is_global_platform (boolean), "
-                "why_dangerous (1-2 sentences), evidence_snippet (short quote/paraphrase from site), "
-                "features (array of {name, category, description}). "
-                "Score overlap high ONLY when industry + niche + buyer + business model truly match. "
-                "If the rival is a consumer shopping/ecommerce retailer, fintech wallet/payments app, bank, "
-                "government board/ministry/authority, news site, directory, or unrelated industry, "
-                "set same_niche=false, is_leading_rival=false, overlap_score below 40. "
-                "Same broad industry label like 'Technology' is NOT enough — buyers and product must match. "
-                "If the site is a directory, review site, news article, job board, or unrelated industry, "
-                "set same_niche=false, is_leading_rival=false, overlap_score below 40. "
-                "Global hyperscalers/platforms that are not peer businesses should be low threat, "
-                "same_niche=false, is_global_platform=true. "
-                + (
-                    f"LOCAL MARKET REQUIRED: {required_market}. "
-                    f"Set headquarters_country from SITE EVIDENCE only (not guesses). "
-                    f"If headquarters / primary selling country is clearly NOT {required_market}, "
-                    "set same_market=false and overlap_score below 40. "
-                    "Do not treat neighboring countries (e.g. India vs Pakistan, Singapore vs Pakistan) as the same market. "
-                    "Never invent that a foreign company sells primarily in the required market."
-                    if scope == "local" and required_market
-                    else ""
-                )
-            ),
-            json.dumps(
-                {
-                    "client": client.name,
-                    "client_industry": client.industry,
-                    "client_niche": client.niche,
-                    "client_business_model": _business_model_from_client(client),
-                    "client_market_area": required_market or _market_area_from_client(client),
-                    "competitor_scope": scope,
-                    "required_market": required_market or None,
-                    "client_features": [
-                        {"name": f.name, "category": f.category, "description": f.description} for f in features
-                    ],
-                    "competitor": {
-                        "name": competitor.name,
-                        "website": competitor.website,
-                        "site_excerpt": site_md,
-                    },
-                }
-            )[:9000],
-            temperature=0.2,
-        )
-        # If AI fallback text returned, keep prior competitor values — but do not auto-trust as leading
-        if "summary" in analysis and "features" not in analysis:
+        if already_enriched and (competitor.overlap_score or 0) >= 55:
+            # Fast path: reuse prior enrich instead of another scrape+LLM round-trip
             analysis = {
-                "overlap_score": competitor.overlap_score or 55,
+                "tagline": competitor.tagline,
+                "description": competitor.description,
+                "headquarters": competitor.headquarters,
+                "headquarters_country": competitor.headquarters,
+                "overlap_score": competitor.overlap_score or 70,
+                "threat_level": competitor.threat_level or "medium",
+                "is_leading_rival": True,
+                "same_niche": True,
+                "same_market": True,
+                "is_global_platform": False,
+                "why_dangerous": competitor.why_dangerous or competitor.description,
+                "evidence_snippet": competitor.evidence_snippet,
+                "features": competitor.feature_list or [],
+            }
+        else:
+            analysis = await ai_service.structured_json(
+                db,
+                agency.id,
+                (
+                    "Enrich a competitor for competitive intelligence against THIS client only. "
+                    "Return JSON keys: tagline, description, headquarters, headquarters_country, industry, business_model, "
+                    "overlap_score (0-100), threat_level (low|medium|high), is_leading_rival (boolean), "
+                    "same_niche (boolean), same_market (boolean), is_global_platform (boolean), "
+                    "why_dangerous (1-2 sentences), evidence_snippet (short quote/paraphrase from site), "
+                    "features (array of {name, category, description}). "
+                    "Score overlap high ONLY when industry + niche + buyer + business model truly match. "
+                    "If the rival is a consumer shopping/ecommerce retailer, fintech wallet/payments app, bank, "
+                    "government board/ministry/authority, news site, directory, or unrelated industry, "
+                    "set same_niche=false, is_leading_rival=false, overlap_score below 40. "
+                    "Same broad industry label like 'Technology' is NOT enough — buyers and product must match. "
+                    "If the site is a directory, review site, news article, job board, or unrelated industry, "
+                    "set same_niche=false, is_leading_rival=false, overlap_score below 40. "
+                    "Global hyperscalers/platforms that are not peer businesses should be low threat, "
+                    "same_niche=false, is_global_platform=true. "
+                    + (
+                        f"LOCAL MARKET REQUIRED: {required_market}. "
+                        f"Set headquarters_country from SITE EVIDENCE only (not guesses). "
+                        f"If headquarters / primary selling country is clearly NOT {required_market}, "
+                        "set same_market=false and overlap_score below 40. "
+                        "Do not treat neighboring countries (e.g. India vs Pakistan, Singapore vs Pakistan) as the same market. "
+                        "Never invent that a foreign company sells primarily in the required market."
+                        if scope == "local" and required_market
+                        else ""
+                    )
+                ),
+                json.dumps(
+                    {
+                        "client": client.name,
+                        "client_industry": client.industry,
+                        "client_niche": client.niche,
+                        "client_business_model": _business_model_from_client(client),
+                        "client_market_area": required_market or _market_area_from_client(client),
+                        "competitor_scope": scope,
+                        "required_market": required_market or None,
+                        "client_features": [
+                            {"name": f.name, "category": f.category, "description": f.description} for f in features
+                        ],
+                        "competitor": {
+                            "name": competitor.name,
+                            "website": competitor.website,
+                            "site_excerpt": site_md,
+                        },
+                    }
+                )[:9000],
+                temperature=0.2,
+            )
+        # If AI fallback text returned, keep prior competitor values — but do not auto-trust as leading
+        if not analysis or ("summary" in analysis and "features" not in analysis):
+            analysis = {
+                "overlap_score": competitor.overlap_score or 70,
                 "threat_level": competitor.threat_level or "medium",
                 "is_leading_rival": False,
-                "same_niche": True if competitor.is_pinned else None,
-                "why_dangerous": competitor.why_dangerous or competitor.description or f"{competitor.name} competes for the same buyers.",
+                "same_niche": True,
+                "same_market": True,
+                "is_global_platform": False,
+                "why_dangerous": competitor.why_dangerous
+                or competitor.description
+                or f"{competitor.name} competes for the same buyers.",
                 "features": competitor.feature_list or [],
             }
 
@@ -2631,12 +4579,47 @@ async def run_competitive_pack(
             rival_model=_as_str(analysis.get("business_model")),
             rival_industry=_as_str(analysis.get("industry")),
             rival_blob=peer_blob,
+            client_name=client.name,
         )
         curated = _is_curated_seed_rival(
             competitor.name,
             required_market,
             kind="food" if client_is_food else ("software" if client_is_software_peer else None),
         )
+        client_food_tier = (
+            _food_tier_from_blob(client.name, client.niche, client.industry, _business_model_from_client(client))
+            if client_is_food
+            else None
+        )
+        client_peer_scale = _peer_scale_from_blob(
+            client.name,
+            client.niche,
+            client.industry,
+            _business_model_from_client(client),
+            name=client.name,
+        )
+        # Boutique / local-specialty clients: enterprise giants & food franchises are not peers
+        if not competitor.is_pinned and (
+            (
+                client_food_tier == _FOOD_TIER_LOCAL
+                and _is_global_food_franchise(competitor.name, competitor.website)
+            )
+            or (
+                client_peer_scale == _PEER_BOUTIQUE
+                and (
+                    _is_global_food_franchise(competitor.name, competitor.website)
+                    or _is_global_megarival(competitor.name, competitor.website)
+                    or _peer_scale_from_blob(
+                        competitor.name, competitor.description, name=competitor.name, website=competitor.website
+                    )
+                    == _PEER_ENTERPRISE
+                )
+            )
+        ):
+            curated = False
+            competitor.is_tracking = False
+            competitor.threat_level = "low"
+            continue
         # Curated seeds already passed geo/niche gates — don't let flaky scrape/AI wipe the list down to 1
         if curated and not hq_key and market_key:
             hq_key = market_key
@@ -2710,6 +4693,38 @@ async def run_competitive_pack(
             )
         )
         if off_niche:
+            # Add mode: do not wipe the user's existing list for soft AI/scrape misses
+            name_key = _as_str(competitor.name).lower().strip()
+            hard_drop = (
+                fake_brand
+                or bad_peer
+                or _is_global_megarival(competitor.name, competitor.website)
+                or _is_global_food_franchise(competitor.name, competitor.website)
+                or site_host_noise
+                or _looks_like_invented_food_domain(competitor.name, competitor.website)
+                or _looks_like_content_or_cpg_noise(competitor.name, competitor.website)
+                or _looks_like_recipe_or_menu_item_name(competitor.name)
+                or _looks_like_marketing_slogan_name(competitor.name)
+                or (
+                    client_is_food
+                    and (
+                        _looks_like_software_peer_client(
+                            competitor.name, competitor.description, competitor.why_dangerous, peer_blob
+                        )
+                        or _looks_like_fmcg_or_snack_brand(
+                            competitor.name, competitor.description, competitor.why_dangerous, peer_blob
+                        )
+                    )
+                )
+            )
+            if mode == "add" and name_key in baseline_set and not hard_drop:
+                competitor.is_tracking = True
+                if (competitor.overlap_score or 0) < 55:
+                    competitor.overlap_score = 70.0
+                if competitor.threat_level == "low":
+                    competitor.threat_level = "medium"
+                kept.append(competitor)
+                continue
             competitor.is_tracking = False
             competitor.threat_level = "low"
             continue
@@ -2731,35 +4746,88 @@ async def run_competitive_pack(
             kept.insert(0, competitor)
             kept_ids.add(competitor.id)
 
+    # Add mode: restore every baseline rival that is still in DB (keep current promise)
+    if mode == "add" and baseline_set:
+        for competitor in analyzed:
+            name_key = _as_str(competitor.name).lower().strip()
+            if competitor.id in kept_ids or name_key not in baseline_set:
+                continue
+            if (
+                _is_generic_or_fake_rival_name(competitor.name)
+                or _looks_like_invented_food_domain(competitor.name, competitor.website)
+                or _looks_like_recipe_or_menu_item_name(competitor.name)
+                or _looks_like_content_or_cpg_noise(competitor.name, competitor.website)
+            ):
+                continue
+            competitor.is_tracking = True
+            if competitor.threat_level == "low":
+                competitor.threat_level = "medium"
+            if (competitor.overlap_score or 0) < 55:
+                competitor.overlap_score = 72.0
+            kept.insert(0, competitor)
+            kept_ids.add(competitor.id)
+            logger.info(
+                "Add-mode kept existing rival %s for client=%s",
+                competitor.name,
+                client.id,
+            )
+
+    # Also restore baseline rivals that were not in this analyze pass (still in DB)
+    if mode == "add" and baseline_set:
+        existing_all_baseline = (
+            await db.execute(
+                select(Competitor).where(
+                    Competitor.client_id == client.id,
+                    Competitor.agency_id == agency.id,
+                )
+            )
+        ).scalars().all()
+        for rival in existing_all_baseline:
+            name_key = _as_str(rival.name).lower().strip()
+            if rival.id in kept_ids or name_key not in baseline_set:
+                continue
+            if (
+                _is_generic_or_fake_rival_name(rival.name)
+                or _looks_like_invented_food_domain(rival.name, rival.website)
+                or _looks_like_recipe_or_menu_item_name(rival.name)
+                or _looks_like_content_or_cpg_noise(rival.name, rival.website)
+            ):
+                continue
+            rival.is_tracking = True
+            if rival.threat_level == "low":
+                rival.threat_level = "medium"
+            if (rival.overlap_score or 0) < 55:
+                rival.overlap_score = 72.0
+            kept.insert(0, rival)
+            kept_ids.add(rival.id)
+
     pinned_kept = sum(1 for c in kept if c.is_pinned)
-    auto_kept = sum(1 for c in kept if not c.is_pinned)
     if mode == "update":
         target_kept = max(count, pinned_kept)
     elif mode == "replace":
         target_kept = pinned_kept + count
     else:
-        target_kept = pinned_kept + max(auto_kept, count)
+        # add = keep current survivors + find exactly `count` NEW names
+        new_in_kept = (
+            sum(1 for c in kept if _as_str(c.name).lower().strip() not in baseline_set)
+            if baseline_set
+            else 0
+        )
+        need_more = max(0, count - new_in_kept) if baseline_set else count
+        target_kept = len(kept) + need_more
+        logger.info(
+            "Add-mode rival target client=%s baseline=%s kept=%s already_new=%s still_need=%s target=%s",
+            client.id,
+            len(baseline_set),
+            len(kept),
+            new_in_kept,
+            need_more,
+            target_kept,
+        )
 
-    # Local markets (e.g. Pakistan) have many real software houses — don't stop at 2–3
-    # just because AI/scrape prune was harsh. Backfill from curated peers up to requested count.
-    client_is_software_for_backfill = _looks_like_software_peer_client(
-        client.industry, client.niche, _business_model_from_client(client), client.name
-    )
-    client_is_food_for_backfill = _looks_like_food_client(
-        client.industry,
-        client.niche,
-        _business_model_from_client(client),
-        client.name,
-        client.notes,
-        client.tagline,
-        " ".join(f"{_as_str(f.name)} {_as_str(f.description)}" for f in features[:10]),
-    )
-    if (
-        client_is_software_for_backfill
-        and scope == "local"
-        and required_market
-        and len(kept) < target_kept
-    ):
+    # If prune left us short of the requested count, fill remaining slots with
+    # same-tier AI peers (not curated seed lists).
+    if len(kept) < target_kept:
         existing_all = (
             await db.execute(
                 select(Competitor).where(
@@ -2768,33 +4836,157 @@ async def run_competitive_pack(
                 )
             )
         ).scalars().all()
-        by_name_existing = {_as_str(c.name).lower(): c for c in existing_all}
-        # Only block names already kept — pruned rivals may be re-enabled from seeds.
+        # When AI is down: first re-enable BASELINE peers, then other same-category untracked
+        if mode == "add":
+            client_fmt = (
+                _food_format_from_blob(client.name, client.niche, client.industry)
+                if _looks_like_food_client(client.name, client.niche, client.industry)
+                else ""
+            )
+            client_tier = (
+                _food_tier_from_blob(client.name, client.niche, client.industry)
+                if client_fmt
+                else ""
+            )
+
+            def _can_reenable(rival: Competitor) -> bool:
+                if rival.id in kept_ids:
+                    return False
+                if _is_global_food_franchise(rival.name, rival.website):
+                    return False
+                if _is_generic_or_fake_rival_name(rival.name) or _looks_like_invented_food_domain(
+                    rival.name, rival.website
+                ):
+                    return False
+                if _looks_like_content_or_cpg_noise(rival.name, rival.website):
+                    return False
+                # Skip SERP title junk like "Savor The Biggest Pizza in Town"
+                if len(_as_str(rival.name).split()) >= 6:
+                    return False
+                if client_fmt:
+                    rival_fmt = _food_format_from_blob(
+                        rival.name, rival.description, rival.why_dangerous, rival.website
+                    )
+                    if rival_fmt != _FOOD_FORMAT_GENERAL and not _food_format_compatible(
+                        client_fmt, rival_fmt
+                    ):
+                        return False
+                    rival_tier = _food_tier_from_blob(rival.name, rival.description)
+                    if rival_tier and not _food_tier_compatible(client_tier, rival_tier):
+                        return False
+                if not _rival_fits_run_scope(
+                    name=_as_str(rival.name),
+                    website=rival.website,
+                    headquarters=rival.headquarters,
+                    description=rival.description,
+                    why=rival.why_dangerous,
+                    scope=scope,
+                    market=required_market or "",
+                    client_name=client.name,
+                    is_pinned=False,
+                    strict=False,
+                ):
+                    return False
+                return True
+
+            # Pass 1: baseline names first (keep-current promise)
+            for rival in existing_all:
+                if len(kept) >= target_kept and _as_str(rival.name).lower().strip() not in baseline_set:
+                    break
+                name_key = _as_str(rival.name).lower().strip()
+                if name_key not in baseline_set:
+                    continue
+                if rival.is_tracking and rival.id in kept_ids:
+                    continue
+                if not _can_reenable(rival):
+                    continue
+                rival.is_tracking = True
+                rival.is_pinned = False
+                if (rival.overlap_score or 0) < 55:
+                    rival.overlap_score = 74.0
+                if not rival.threat_level or rival.threat_level == "low":
+                    rival.threat_level = "high"
+                if rival.id not in kept_ids:
+                    kept.append(rival)
+                    kept_ids.add(rival.id)
+                logger.info(
+                    "Re-enabled baseline peer %s for client=%s (add-mode keep-current)",
+                    rival.name,
+                    client.id,
+                )
+
+            # Pass 2: other untracked peers only to fill NEW slots
+            for rival in existing_all:
+                if len(kept) >= target_kept:
+                    break
+                if rival.is_tracking and rival.id in kept_ids:
+                    continue
+                name_key = _as_str(rival.name).lower().strip()
+                if name_key in baseline_set:
+                    continue
+                if not _can_reenable(rival):
+                    continue
+                rival.is_tracking = True
+                rival.is_pinned = False
+                if (rival.overlap_score or 0) < 55:
+                    rival.overlap_score = 74.0
+                if not rival.threat_level or rival.threat_level == "low":
+                    rival.threat_level = "high"
+                kept.append(rival)
+                kept_ids.add(rival.id)
+                logger.info(
+                    "Re-enabled untracked peer %s for client=%s (AI thin / add-mode)",
+                    rival.name,
+                    client.id,
+                )
+
         already_names = [_as_str(c.name) for c in kept]
-        seeds = _seed_local_software_rivals(
-            required_market,
-            client.name,
+        bm = _business_model_from_client(client)
+        fill_market = required_market if scope == "local" else "global / international"
+        fill_rows = await _ai_propose_same_tier_peers(
+            db,
+            agency.id,
+            client,
+            needed=target_kept - len(kept),
             already_have=already_names,
-            client_website=client.website,
-            limit=max(count * 3, 15),
+            scope=scope,
+            market_focus=fill_market,
+            business_model=bm,
         )
-        for item in seeds:
+        for item in fill_rows:
             if len(kept) >= target_kept:
                 break
             name = _as_str(item.get("name")).strip()
             website = _normalize_website(_as_str(item.get("website")) or None)
             if not name or not website:
                 continue
-            key = name.lower()
+            if _is_generic_or_fake_rival_name(name):
+                continue
+            if _looks_like_content_or_cpg_noise(name, website):
+                continue
+            if _looks_like_brand_geo_hallucination(
+                client.name,
+                name,
+                required_market or _market_area_from_client(client),
+                website=website,
+                source=_as_str(item.get("source")) or "ai",
+            ):
+                continue
             competitor = _find_matching_competitor(existing_all, name, website)
+            hq = required_market or _as_str(item.get("headquarters_country")) or None
+            why = _as_str(item.get("why_relevant")) or None
+            try:
+                overlap = float(item.get("overlap_score") or 72)
+            except (TypeError, ValueError):
+                overlap = 72.0
             if competitor:
                 if competitor.id in kept_ids:
                     continue
                 competitor.website = website or competitor.website
-                competitor.headquarters = competitor.headquarters or required_market
-                competitor.description = competitor.description or _as_str(item.get("why_relevant"))
-                competitor.why_dangerous = competitor.why_dangerous or _as_str(item.get("why_relevant"))
-                competitor.overlap_score = max(float(competitor.overlap_score or 0), 70.0)
+                competitor.headquarters = competitor.headquarters or hq
+                competitor.description = competitor.description or why
+                competitor.why_dangerous = competitor.why_dangerous or why
+                competitor.overlap_score = max(float(competitor.overlap_score or 0), overlap, 70.0)
                 competitor.threat_level = (
                     "high" if competitor.threat_level == "low" else (competitor.threat_level or "high")
                 )
@@ -2805,11 +4997,11 @@ async def run_competitive_pack(
                     client_id=client.id,
                     name=name,
                     website=website,
-                    description=_as_str(item.get("why_relevant")) or None,
-                    why_dangerous=_as_str(item.get("why_relevant")) or None,
-                    headquarters=required_market,
-                    threat_level="high",
-                    overlap_score=72.0,
+                    description=why,
+                    why_dangerous=why,
+                    headquarters=hq,
+                    threat_level=_as_str(item.get("threat_level"), "high").lower() or "high",
+                    overlap_score=max(overlap, 70.0),
                     is_tracking=True,
                     feature_list=[],
                 )
@@ -2821,17 +5013,26 @@ async def run_competitive_pack(
             analyzed.append(competitor)
         if len(kept) < target_kept:
             logger.warning(
-                "Local software backfill still short for client=%s market=%s kept=%s requested=%s",
+                "AI peer backfill still short for client=%s market=%s kept=%s requested=%s",
                 client.id,
                 required_market,
                 len(kept),
                 count,
             )
-    elif (
-        client_is_food_for_backfill
+
+    # Food/local last resort when Serp+AI still left us short
+    if (
+        len(kept) < target_kept
         and scope == "local"
         and required_market
-        and len(kept) < target_kept
+        and _looks_like_food_client(
+            client.name,
+            client.industry,
+            client.niche,
+            _business_model_from_client(client),
+            client.notes,
+            client.tagline,
+        )
     ):
         existing_all = (
             await db.execute(
@@ -2841,47 +5042,56 @@ async def run_competitive_pack(
                 )
             )
         ).scalars().all()
-        by_name_existing = {_as_str(c.name).lower(): c for c in existing_all}
         already_names = [_as_str(c.name) for c in kept]
-        seeds = _seed_local_qsr_rivals(
+        food_tier = _food_tier_from_blob(
+            client.name, client.niche, client.industry, _business_model_from_client(client)
+        )
+        for item in _seed_local_qsr_rivals(
             required_market,
             client.name,
             already_have=already_names,
             client_website=client.website,
-            limit=max(count * 3, 12),
-        )
-        for item in seeds:
+            client_tier=food_tier,
+            client_niche=_as_str(client.niche),
+            client_industry=_as_str(client.industry),
+            limit=max(count * 2, 8),
+        ):
             if len(kept) >= target_kept:
                 break
             name = _as_str(item.get("name")).strip()
             website = _normalize_website(_as_str(item.get("website")) or None)
             if not name or not website:
                 continue
-            key = name.lower()
+            if _looks_like_brand_geo_hallucination(
+                client.name, name, required_market, website=website, source="seed"
+            ):
+                continue
             competitor = _find_matching_competitor(existing_all, name, website)
+            why = _as_str(item.get("why_relevant")) or None
             if competitor:
                 if competitor.id in kept_ids:
                     continue
                 competitor.website = website or competitor.website
                 competitor.headquarters = competitor.headquarters or required_market
-                competitor.description = competitor.description or _as_str(item.get("why_relevant"))
-                competitor.why_dangerous = competitor.why_dangerous or _as_str(item.get("why_relevant"))
+                competitor.description = competitor.description or why
+                competitor.why_dangerous = competitor.why_dangerous or why
                 competitor.overlap_score = max(float(competitor.overlap_score or 0), 74.0)
                 competitor.threat_level = (
                     "high" if competitor.threat_level == "low" else (competitor.threat_level or "high")
                 )
                 competitor.is_tracking = True
+                competitor.is_pinned = False
             else:
                 competitor = Competitor(
                     agency_id=agency.id,
                     client_id=client.id,
                     name=name,
                     website=website,
-                    description=_as_str(item.get("why_relevant")) or None,
-                    why_dangerous=_as_str(item.get("why_relevant")) or None,
+                    description=why,
+                    why_dangerous=why,
                     headquarters=required_market,
                     threat_level="high",
-                    overlap_score=78.0,
+                    overlap_score=76.0,
                     is_tracking=True,
                     feature_list=[],
                 )
@@ -2891,6 +5101,130 @@ async def run_competitive_pack(
             kept.append(competitor)
             kept_ids.add(competitor.id)
             analyzed.append(competitor)
+
+    # Software/local last resort — fill to requested count with curated peer houses
+    if (
+        len(kept) < target_kept
+        and _looks_like_software_peer_client(
+            client.name,
+            client.industry,
+            client.niche,
+            _business_model_from_client(client),
+            client.notes,
+            client.tagline,
+        )
+    ):
+        existing_all = (
+            await db.execute(
+                select(Competitor).where(
+                    Competitor.client_id == client.id,
+                    Competitor.agency_id == agency.id,
+                )
+            )
+        ).scalars().all()
+        already_names = [_as_str(c.name) for c in kept]
+        user_country = _as_str(competitor_country).strip()
+        seed_market = user_country or required_market or _market_area_from_client(client)
+        home = _known_brand_home_market(client.name, client.website)
+        seed_rows = _seed_local_software_rivals(
+            seed_market,
+            client.name,
+            already_have=already_names,
+            client_website=client.website,
+            client_niche=_as_str(client.niche),
+            client_industry=_as_str(client.industry),
+            limit=max(count * 2, 8),
+        )
+        # Only fall back to brand-home seeds when the user did NOT pick a country
+        if (
+            not seed_rows
+            and not user_country
+            and home
+            and _normalize_country_key(home) != _normalize_country_key(seed_market)
+        ):
+            seed_rows = _seed_local_software_rivals(
+                home,
+                client.name,
+                already_have=already_names,
+                client_website=client.website,
+                client_niche=_as_str(client.niche),
+                client_industry=_as_str(client.industry),
+                limit=max(count * 2, 8),
+            )
+            seed_market = home
+        if not seed_rows and scope == "global":
+            # Global software peers from curated international list
+            for seed in _GLOBAL_SOFTWARE_SEEDS:
+                name = _as_str(seed.get("name")).strip()
+                website = _normalize_website(_as_str(seed.get("website")) or None)
+                if not name or not website:
+                    continue
+                if _rival_keys(name, website) & _blocked_rival_keys(already_names, client.name):
+                    continue
+                seed_rows.append(
+                    {
+                        "name": name,
+                        "website": website,
+                        "why_relevant": f"Global software / digital peer for {client.name}",
+                        "overlap_score": 74.0,
+                        "threat_level": "high",
+                        "source": "seed",
+                        "headquarters_country": _as_str(seed.get("headquarters_country")) or None,
+                    }
+                )
+                if len(seed_rows) >= count * 2:
+                    break
+        for item in seed_rows:
+            if len(kept) >= target_kept:
+                break
+            name = _as_str(item.get("name")).strip()
+            website = _normalize_website(_as_str(item.get("website")) or None)
+            if not name or not website or _is_generic_or_fake_rival_name(name):
+                continue
+            competitor = _find_matching_competitor(existing_all, name, website)
+            why = _as_str(item.get("why_relevant")) or None
+            hq = _as_str(item.get("headquarters_country")) or seed_market
+            if competitor:
+                if competitor.id in kept_ids:
+                    continue
+                competitor.website = website or competitor.website
+                competitor.headquarters = competitor.headquarters or hq
+                competitor.description = competitor.description or why
+                competitor.why_dangerous = competitor.why_dangerous or why
+                competitor.overlap_score = max(float(competitor.overlap_score or 0), 74.0)
+                competitor.threat_level = (
+                    "high" if competitor.threat_level == "low" else (competitor.threat_level or "high")
+                )
+                competitor.is_tracking = True
+                competitor.is_pinned = False
+            else:
+                competitor = Competitor(
+                    agency_id=agency.id,
+                    client_id=client.id,
+                    name=name,
+                    website=website,
+                    description=why,
+                    why_dangerous=why,
+                    headquarters=hq,
+                    threat_level="high",
+                    overlap_score=76.0,
+                    is_tracking=True,
+                    feature_list=[],
+                )
+                db.add(competitor)
+                await db.flush()
+                existing_all.append(competitor)
+            kept.append(competitor)
+            kept_ids.add(competitor.id)
+            analyzed.append(competitor)
+        if seed_rows:
+            logger.warning(
+                "Software last-resort peers used for client=%s market=%s kept=%s target=%s",
+                client.id,
+                seed_market,
+                len(kept),
+                target_kept,
+            )
 
     if not kept and analyzed:
         # Prefer strongest overlaps that are not megacorp/noise domains.
@@ -2922,6 +5256,118 @@ async def run_competitive_pack(
     # update: refresh up to `count`. replace: pinned + up to `count` fresh. add: keep all after prune.
     collapse_duplicate_competitors(kept)
     kept = [c for c in kept if c.is_tracking]
+    # Final scope gate — local shows only selected-country peers; global drops noise/hallucinations
+    # add/keep-current: previous rivals stay tracked even if this run's country/global differs
+    scope_market = required_market if scope == "local" else (required_market or "")
+    client_kind_final = (
+        f"{client.name} {client.industry or ''} {client.niche or ''} "
+        f"{_business_model_from_client(client)} {client.notes or ''} {client.tagline or ''}"
+    )
+
+    def _hard_junk_rival(rival: Competitor) -> bool:
+        if _is_generic_or_fake_rival_name(rival.name):
+            return True
+        if _looks_like_recipe_or_menu_item_name(rival.name):
+            return True
+        if _looks_like_invented_food_domain(rival.name, rival.website):
+            return True
+        if _looks_like_content_or_cpg_noise(rival.name, rival.website):
+            return True
+        if _looks_like_food_client(client_kind_final) and (
+            _looks_like_software_peer_client(rival.name, rival.description, rival.why_dangerous, rival.website)
+            or _looks_like_fmcg_or_snack_brand(rival.name, rival.description, rival.why_dangerous, rival.website)
+        ):
+            return True
+        if _incompatible_peer(
+            client_model=_business_model_from_client(client),
+            client_industry=_as_str(client.industry),
+            client_niche=_as_str(client.niche) or _as_str(client.notes),
+            rival_model="",
+            rival_industry="",
+            rival_blob=f"{rival.name} {rival.description or ''} {rival.why_dangerous or ''}",
+            client_name=client.name,
+        ):
+            return True
+        return False
+
+    filtered_kept: list[Competitor] = []
+    for rival in kept:
+        name_key = _as_str(rival.name).lower().strip()
+        is_baseline = mode == "add" and name_key in baseline_set
+        if is_baseline and not _hard_junk_rival(rival):
+            rival.is_tracking = True
+            filtered_kept.append(rival)
+            continue
+        if _hard_junk_rival(rival):
+            rival.is_tracking = False
+            rival.is_pinned = False
+            continue
+        fits = _rival_fits_run_scope(
+            name=_as_str(rival.name),
+            website=rival.website,
+            headquarters=rival.headquarters,
+            description=rival.description,
+            why=rival.why_dangerous,
+            scope=scope,
+            market=scope_market,
+            client_name=client.name,
+            is_pinned=False,
+            strict=(scope == "local"),
+        )
+        # Curated seeds for THIS run's selected market always pass (Saudi select → Saudi seeds)
+        if (
+            not fits
+            and scope == "local"
+            and scope_market
+            and _looks_like_software_peer_client(client_kind_final)
+            and _is_curated_seed_rival(rival.name, scope_market, kind="software")
+        ):
+            fits = True
+        if fits:
+            filtered_kept.append(rival)
+        else:
+            rival.is_tracking = False
+            rival.is_pinned = False
+    kept = filtered_kept
+    # Also untrack any other auto rivals still marked tracking that failed this run's filter
+    all_tracked = (
+        await db.execute(
+            select(Competitor).where(
+                Competitor.client_id == client.id,
+                Competitor.agency_id == agency.id,
+                Competitor.is_tracking.is_(True),
+            )
+        )
+    ).scalars().all()
+    kept_ids_final = {c.id for c in kept}
+    for rival in all_tracked:
+        if rival.id in kept_ids_final:
+            continue
+        name_key = _as_str(rival.name).lower().strip()
+        # add/keep-current: pull baseline rivals back into the list across country/global changes
+        if mode == "add" and name_key in baseline_set and not _hard_junk_rival(rival):
+            rival.is_tracking = True
+            kept.insert(0, rival)
+            kept_ids_final.add(rival.id)
+            continue
+        if not _rival_fits_run_scope(
+            name=_as_str(rival.name),
+            website=rival.website,
+            headquarters=rival.headquarters,
+            description=rival.description,
+            why=rival.why_dangerous,
+            scope=scope,
+            market=scope_market,
+            client_name=client.name,
+            is_pinned=False,
+            strict=(scope == "local"),
+        ):
+            rival.is_tracking = False
+            rival.is_pinned = False
+            continue
+        if rival.is_pinned:
+            kept.insert(0, rival)
+            kept_ids_final.add(rival.id)
     kept = sorted(kept, key=lambda c: (1 if c.is_pinned else 0, float(c.overlap_score or 0)), reverse=True)
     pinned_final = [c for c in kept if c.is_pinned]
     others_final = [c for c in kept if not c.is_pinned]
@@ -2935,6 +5381,13 @@ async def run_competitive_pack(
         competitors = pinned_final + others_final[:count]
     else:
         competitors = pinned_final + others_final
+    # Replace: untrack auto rivals not in the fresh set
+    if mode == "replace":
+        final_ids = {c.id for c in competitors}
+        for rival in all_tracked:
+            if rival.is_pinned or rival.id in final_ids:
+                continue
+            rival.is_tracking = False
     from app.services.billing import max_tracked_rivals
 
     rival_cap = max_tracked_rivals(agency)
@@ -2944,7 +5397,26 @@ async def run_competitive_pack(
         for extra in overflow:
             extra.is_tracking = False
     if not competitors:
-        raise ValueError("No competitors available for this client after enrichment.")
+        is_food = _looks_like_food_client(
+            client.name,
+            client.industry,
+            client.niche,
+            _business_model_from_client(client),
+            client.notes,
+            client.tagline,
+        )
+        peer_hint = (
+            _food_rival_peer_hint(
+                client.name, client.industry, client.niche, client.notes, client.tagline
+            )
+            if is_food
+            else "peer rivals"
+        )
+        raise ValueError(
+            f"No matching {peer_hint} survived this run's filter "
+            f"({'local · ' + (required_market or 'market') if scope == 'local' else 'global'}). "
+            "Try again shortly, or add real rivals manually and pin them."
+        )
 
     comparisons_payload: list[dict] = []
     for competitor in competitors:
@@ -3551,7 +6023,7 @@ async def run_full_ai_pipeline(
     client: ClientBrand,
     *,
     push_jira: bool = True,
-    generate_report: bool = True,
+    generate_report: bool = False,
     competitor_scope: str = "local",
     competitor_country: str | None = None,
     competitor_count: int = 5,
@@ -3589,6 +6061,7 @@ async def run_full_ai_pipeline(
             competitor_country=competitor_country,
             competitor_count=competitor_count,
             competitor_mode=competitor_mode,
+            baseline_rival_names=list(enrich.get("baseline_rival_names") or []),
         )
         radar = await run_client_intelligence(
             db, agency, client, competitor_country=competitor_country

@@ -35,11 +35,40 @@ async def _vault_key(db: AsyncSession, agency_id: str, provider: str) -> str | N
 
 
 async def resolve_apify(db: AsyncSession, agency_id: str) -> str:
+    # BYOK optional — platform .env key is the product default
     return (await _vault_key(db, agency_id, "apify")) or settings.apify_key
 
 
+def _looks_like_invalid_serp_key(key: str) -> bool:
+    """SerpAPI keys are typically 32–64 hex chars, not UUID-shaped placeholders."""
+    raw = (key or "").strip()
+    if not raw:
+        return True
+    # Common mistake: UUID pasted into SERP_API
+    if len(raw) == 36 and raw.count("-") == 4:
+        return True
+    if len(raw) < 20:
+        return True
+    return False
+
+
 async def resolve_serp(db: AsyncSession, agency_id: str) -> str:
-    return (await _vault_key(db, agency_id, "serpapi")) or settings.serp_api
+    """Prefer optional agency BYOK; otherwise use platform SERP_API from env."""
+    byok = (await _vault_key(db, agency_id, "serpapi") or "").strip()
+    platform = (settings.serp_api or "").strip()
+    if byok and not _looks_like_invalid_serp_key(byok):
+        return byok
+    if byok and _looks_like_invalid_serp_key(byok) and platform:
+        logger.warning(
+            "Agency %s SerpAPI BYOK key looks invalid — falling back to platform SERP_API",
+            agency_id,
+        )
+    if platform and _looks_like_invalid_serp_key(platform):
+        logger.error(
+            "Platform SERP_API looks invalid (placeholder/UUID). "
+            "Set a real SerpAPI key in backend .env — users should not need BYOK for defaults."
+        )
+    return platform or byok
 
 
 async def resolve_firecrawl(db: AsyncSession, agency_id: str) -> str:
@@ -86,7 +115,7 @@ async def scrape_website(db: AsyncSession, agency_id: str, url: str) -> dict[str
         return {"url": url, "markdown": "", "status": "skipped", "note": "Missing Firecrawl key or URL"}
     try:
         await ensure_scrape_quota(db, agency_id)
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=22) as client:
             response = await client.post(
                 "https://api.firecrawl.dev/v1/scrape",
                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
@@ -111,45 +140,61 @@ async def serp_visibility(
     gl: str | None = None,
 ) -> dict[str, Any]:
     key = await resolve_serp(db, agency_id)
+    platform = (settings.serp_api or "").strip()
     if not key:
-        return {"query": query, "status": "skipped", "organic": []}
+        return {"query": query, "status": "skipped", "organic": [], "detail": "No platform SerpAPI key configured"}
     try:
         await ensure_scrape_quota(db, agency_id)
-        params: dict[str, Any] = {"engine": "google", "q": query, "api_key": key, "num": 10}
-        if location:
-            params["location"] = location
-        if gl:
-            params["gl"] = gl
-        async with httpx.AsyncClient(timeout=45) as client:
-            response = await client.get(
-                "https://serpapi.com/search.json",
-                params=params,
+
+        async def _call(api_key: str) -> httpx.Response:
+            params: dict[str, Any] = {"engine": "google", "q": query, "api_key": api_key, "num": 10}
+            if location:
+                params["location"] = location
+            if gl:
+                params["gl"] = gl
+            async with httpx.AsyncClient(timeout=20) as client:
+                return await client.get("https://serpapi.com/search.json", params=params)
+
+        response = await _call(key)
+        # If BYOK key fails auth, retry once with platform default
+        if (
+            response.status_code in {401, 403}
+            and platform
+            and key != platform
+            and not _looks_like_invalid_serp_key(platform)
+        ):
+            logger.warning(
+                "SerpAPI BYOK unauthorized for agency=%s — retrying with platform key",
+                agency_id,
             )
-            if response.status_code >= 400:
-                logger.warning(
-                    "SerpAPI error status=%s query=%s detail=%s",
-                    response.status_code,
-                    query[:120],
-                    response.text[:200],
-                )
-                return {
-                    "query": query,
-                    "status": "unauthorized" if response.status_code in {401, 403} else "error",
-                    "detail": response.text[:500],
-                    "organic": [],
-                }
-            data = response.json()
-            await track_usage(db, agency_id, "serp_search", 1, {"query": query, "location": location, "gl": gl})
-            organic = [
-                {
-                    "position": i.get("position"),
-                    "title": i.get("title"),
-                    "link": i.get("link"),
-                    "snippet": i.get("snippet"),
-                }
-                for i in data.get("organic_results", [])[:10]
-            ]
-            return {"query": query, "status": "ok", "organic": organic}
+            response = await _call(platform)
+            key = platform
+
+        if response.status_code >= 400:
+            logger.warning(
+                "SerpAPI error status=%s query=%s detail=%s",
+                response.status_code,
+                query[:120],
+                response.text[:200],
+            )
+            return {
+                "query": query,
+                "status": "unauthorized" if response.status_code in {401, 403} else "error",
+                "detail": response.text[:500],
+                "organic": [],
+            }
+        data = response.json()
+        await track_usage(db, agency_id, "serp_search", 1, {"query": query, "location": location, "gl": gl})
+        organic = [
+            {
+                "position": i.get("position"),
+                "title": i.get("title"),
+                "link": i.get("link"),
+                "snippet": i.get("snippet"),
+            }
+            for i in data.get("organic_results", [])[:10]
+        ]
+        return {"query": query, "status": "ok", "organic": organic}
     except Exception as exc:
         return {"query": query, "status": "error", "detail": str(exc)[:500], "organic": []}
 
@@ -275,7 +320,7 @@ async def scrape_radar_top_trends(
         },
         max_items=limit,
         max_total_charge_usd=RADAR_TRENDS_MAX_CHARGE_USD,
-        wait_seconds=75,
+        wait_seconds=45,
         memory_mbytes=512,
     )
     raw_items = result.get("items") or []
