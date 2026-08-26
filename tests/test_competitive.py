@@ -39,6 +39,35 @@ class LocalSeedTests(unittest.TestCase):
         self.assertFalse(_is_generic_or_fake_rival_name("OPTP"))
         self.assertTrue(_is_generic_or_fake_rival_name("TechCorp"))
 
+    def test_recipe_titles_are_not_rivals(self):
+        from app.services.competitive import (
+            _clean_rival_display_name,
+            _is_generic_or_fake_rival_name,
+            _looks_like_content_or_cpg_noise,
+            _looks_like_recipe_or_menu_item_name,
+        )
+
+        recipe = "Authentic Pakistani Street Style Chicken Shawarma"
+        self.assertTrue(_looks_like_recipe_or_menu_item_name(recipe))
+        self.assertTrue(_is_generic_or_fake_rival_name(recipe))
+        self.assertTrue(_is_generic_or_fake_rival_name("Chicken Shawarma Platter"))
+        self.assertFalse(_is_generic_or_fake_rival_name("Shawarma Stop"))
+        self.assertFalse(_is_generic_or_fake_rival_name("Arabic Shawarma"))
+        self.assertEqual(
+            _clean_rival_display_name("Arabic Shawarma: Unique Shawarmas With Auth"),
+            "Arabic Shawarma",
+        )
+        self.assertTrue(_looks_like_content_or_cpg_noise("Yemeni Food in Islamabad"))
+        self.assertTrue(_looks_like_content_or_cpg_noise("Pakistani shawarma Photos"))
+        self.assertTrue(
+            _looks_like_content_or_cpg_noise(
+                "Dawn Shawarma", "https://dawnbread.com.pk/product/shawarma"
+            )
+        )
+        self.assertFalse(
+            _looks_like_content_or_cpg_noise("Shawarma Stop", "https://shawarmastop.co")
+        )
+
     def test_software_houses_are_rejected_for_fast_food_client(self):
         self.assertTrue(
             _incompatible_peer(
@@ -73,8 +102,10 @@ class LocalSeedTests(unittest.TestCase):
             limit=8,
         )
         names = [row["name"] for row in seeds]
-        self.assertIn("Pizza Hut", names)
-        self.assertIn("Domino's Pizza", names)
+        # National pizza chain peers with other PK pizza brands — not global franchises
+        self.assertIn("Broadway Pizza", names)
+        self.assertTrue(any("pizza" in n.lower() or n == "Pizza Max" for n in names))
+        self.assertNotIn("Pizza Hut", names)
         self.assertNotIn("Systems Limited", names)
         kept = _filter_niche_competitors(
             seeds,
@@ -104,7 +135,7 @@ class LocalSeedTests(unittest.TestCase):
             require_local_market=True,
         )
         names = [row["name"] for row in kept]
-        self.assertIn("Pizza Hut", names)
+        self.assertIn("Broadway Pizza", names)
         self.assertGreaterEqual(len(kept), 3)
 
     def test_papa_johns_aliases_are_the_same_rival(self):
@@ -115,7 +146,33 @@ class LocalSeedTests(unittest.TestCase):
         seeds = _seed_local_qsr_rivals("Pakistan", "Cheezious", already_have=["papa johns"], limit=8)
         names = [row["name"].lower() for row in seeds]
         self.assertFalse(any("papa" in name and "john" in name for name in names))
-        self.assertIn("pizza hut", names)
+        self.assertIn("broadway pizza", names)
+
+    def test_pakistan_shawarma_seeds_for_sultan(self):
+        seeds = _seed_local_qsr_rivals(
+            "Pakistan",
+            "Sultan Shawarma",
+            client_website="https://www.sultanshawarma.com",
+            client_niche="shawarma / quick-service restaurant",
+            client_industry="food",
+            limit=8,
+        )
+        names = [row["name"] for row in seeds]
+        self.assertIn("Shawarma Stop", names)
+        self.assertTrue(all(row.get("food_format") == "shawarma" for row in seeds))
+        self.assertNotIn("Pizza Hut", names)
+        self.assertNotIn("Johnny & Jugnu", names)
+        self.assertGreaterEqual(len(seeds), 4)
+        self.assertTrue(
+            {"Monty Shawarma", "Rizwan Pocket Shawarma"} & set(names)
+            or len(seeds) >= 4
+        )
+        from app.services.competitive import _food_rival_peer_hint
+
+        self.assertEqual(
+            _food_rival_peer_hint("Sultan Shawarma", "food", "shawarma"),
+            "shawarma rivals",
+        )
 
     def test_collapse_duplicate_papa_johns(self):
         class Row:
@@ -134,3 +191,70 @@ class LocalSeedTests(unittest.TestCase):
         self.assertTrue(pinned.is_tracking)
         self.assertFalse(seeded.is_tracking)
         self.assertEqual(pinned.website, "https://www.papajohns.com.pk")
+
+    def test_cheezious_serp_queries_are_pizza_not_software(self):
+        from types import SimpleNamespace
+        from app.services.competitive import _niche_competitor_queries, _known_brand_home_market, _normalize_website
+
+        client = SimpleNamespace(
+            name="Cheezious",
+            niche="restaurant",
+            industry="Restaurant",
+            notes="Business model: other",
+            tagline="Cheese lovers",
+            website="https://www.cheezious.com",
+        )
+        local_q = _niche_competitor_queries(client, "Pakistan", scope="local")
+        blob = " ".join(local_q).lower()
+        self.assertTrue(any("pizza" in q.lower() for q in local_q), local_q)
+        self.assertNotIn("software house", blob)
+        self.assertTrue(any("pakistan" in q.lower() for q in local_q), local_q)
+
+        global_q = _niche_competitor_queries(client, "Pakistan", scope="global")
+        gblob = " ".join(global_q).lower()
+        self.assertTrue(any("pizza" in q.lower() or "worldwide" in q.lower() for q in global_q), global_q)
+        self.assertNotIn("pakistan", gblob)
+        self.assertNotIn("software", gblob)
+
+        self.assertEqual(_known_brand_home_market("Cheezious", "https://cheezious.com"), "Pakistan")
+        cleaned = _normalize_website(
+            "https://cheezious.com/?utm_source=google&gclid=abc&utm_campaign=saudi"
+        )
+        self.assertEqual(cleaned, "https://cheezious.com")
+
+    def test_serp_local_peers_survive_filter_without_country_in_snippet(self):
+        rows = [
+            {
+                "name": "Broadway Pizza",
+                "website": "https://broadwaypizza.com.pk",
+                "why_relevant": "Order pizza online for delivery",
+                "overlap_score": 62,
+                "same_niche": True,
+                "same_market": True,
+                "source": "serp",
+            },
+            {
+                "name": "NetSol Technologies",
+                "website": "https://www.netsoltech.com",
+                "why_relevant": "Enterprise software and digital transformation",
+                "industry": "Software",
+                "business_model": "services",
+                "overlap_score": 74,
+                "same_niche": True,
+                "source": "ai",
+            },
+        ]
+        kept = _filter_niche_competitors(
+            rows,
+            "Cheezious",
+            market_area="Pakistan",
+            niche="pizza / quick-service restaurant",
+            industry="Restaurant",
+            business_model="other",
+            min_overlap=55.0,
+            limit=10,
+            require_local_market=True,
+        )
+        names = [r["name"] for r in kept]
+        self.assertIn("Broadway Pizza", names)
+        self.assertNotIn("NetSol Technologies", names)

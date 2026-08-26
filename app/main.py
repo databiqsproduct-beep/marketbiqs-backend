@@ -186,7 +186,26 @@ async def request_timing(request: Request, call_next):
     started = time.perf_counter()
     try:
         response = await call_next(request)
+    except TimeoutError as exc:
+        logger.warning("DB/request timeout on %s %s: %s", request.method, request.url.path, exc)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "Server busy (database timeout). Close and retry intel in a moment.",
+                "error": "timeout",
+            },
+        )
     except Exception as exc:
+        # asyncpg / SQLAlchemy often surface as bare TimeoutError subclasses under Exception
+        if "TimeoutError" in type(exc).__name__ or "timeout" in str(exc).lower()[:80]:
+            logger.warning("Timeout on %s %s: %s", request.method, request.url.path, exc)
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "detail": "Server busy (database timeout). Close and retry intel in a moment.",
+                    "error": "timeout",
+                },
+            )
         logger.exception("Unhandled error on %s %s", request.method, request.url.path)
         return JSONResponse(status_code=500, content={"detail": "Internal server error", "error": str(exc)[:200]})
     response.headers["X-Process-Time-Ms"] = str(int((time.perf_counter() - started) * 1000))

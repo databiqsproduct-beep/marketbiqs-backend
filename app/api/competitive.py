@@ -337,7 +337,15 @@ class AutoRunRequest(BaseModel):
     competitor_count: int = Field(default=5, ge=1, le=10)
     competitor_mode: str = Field(
         default="add",
-        description="update = refresh existing rivals; add = find N new rivals and keep previous ones",
+        description=(
+            "update = refresh existing rivals; "
+            "add = find N new rivals and keep previous ones; "
+            "replace = drop auto-found rivals and discover a fresh set (pinned kept)"
+        ),
+    )
+    generate_report: bool = Field(
+        default=False,
+        description="If true, also generate a white-label report (uses 1 report credit).",
     )
 
     @field_validator("competitor_scope")
@@ -360,8 +368,8 @@ class AutoRunRequest(BaseModel):
     @classmethod
     def _mode(cls, value: str) -> str:
         cleaned = (value or "add").strip().lower()
-        if cleaned not in {"add", "update"}:
-            raise ValueError("competitor_mode must be add or update")
+        if cleaned not in {"add", "update", "replace"}:
+            raise ValueError("competitor_mode must be add, update, or replace")
         return cleaned
 
 
@@ -407,8 +415,11 @@ async def auto_run(
                     status_code=402,
                     detail="Scrape quota exceeded. Purchase extra scrape units on Billing.",
                 )
-        if ctx.agency.reports_used >= ctx.agency.reports_quota:
-            raise HTTPException(status_code=402, detail="Report quota exceeded. Purchase client packs.")
+        if options.generate_report and ctx.agency.reports_used >= ctx.agency.reports_quota:
+            raise HTTPException(
+                status_code=402,
+                detail="Report quota exceeded. Uncheck “Generate report” to run intel only, or purchase more reports.",
+            )
 
     job = TrackingJob(
         agency_id=ctx.agency.id,
@@ -418,7 +429,9 @@ async def auto_run(
         detail=(
             f"Queued AI pipeline ({options.competitor_mode}/{options.competitor_scope}"
             + (f" · {options.competitor_country}" if options.competitor_country else "")
-            + f" · {options.competitor_count} rivals)"
+            + f" · {options.competitor_count} rivals"
+            + (" · +report" if options.generate_report else "")
+            + ")"
         ),
         started_at=datetime.utcnow(),
         result_meta={
@@ -426,6 +439,7 @@ async def auto_run(
             "competitor_country": options.competitor_country,
             "competitor_count": options.competitor_count,
             "competitor_mode": options.competitor_mode,
+            "generate_report": options.generate_report,
         },
     )
     db.add(job)
@@ -437,6 +451,7 @@ async def auto_run(
     country = options.competitor_country
     count = options.competitor_count
     mode = options.competitor_mode
+    generate_report = bool(options.generate_report)
     # Commit before background task so the row is visible to a new session
     await db.commit()
 
@@ -457,7 +472,7 @@ async def auto_run(
                     agency,
                     brand,
                     push_jira=False,
-                    generate_report=True,
+                    generate_report=generate_report,
                     competitor_scope=scope,
                     competitor_country=country,
                     competitor_count=count,
@@ -467,7 +482,10 @@ async def auto_run(
                 if tracked:
                     tracked.status = JobStatus.completed
                     tracked.finished_at = datetime.utcnow()
-                    tracked.detail = "Autonomous AI pipeline completed"
+                    tracked.detail = (
+                        "Autonomous AI pipeline completed"
+                        + (" (report saved)" if generate_report else " (intel only)")
+                    )
                     tracked.result_meta = result if isinstance(result, dict) else {"ok": True}
                 await session.commit()
             except Exception as exc:
@@ -494,6 +512,7 @@ async def auto_run(
             "competitor_country": country,
             "competitor_count": count,
             "competitor_mode": mode,
+            "generate_report": generate_report,
         },
     )
 
@@ -681,6 +700,101 @@ async def client_workspace(
     from app.api.intelligence import list_jobs, list_sentiment, list_snapshots, list_trends
     from app.api.reports import list_reports
     from app.schemas import ClientOut, CompetitorOut, ReportOut, SentimentOut, SnapshotOut, TrendOut
+    from app.services.competitive import (
+        _business_model_from_client,
+        _incompatible_peer,
+        _looks_like_brand_geo_hallucination,
+        _looks_like_food_client,
+        _looks_like_furniture_or_home_brand,
+        _looks_like_invented_food_domain,
+        _looks_like_software_peer_client,
+        _looks_like_fmcg_or_snack_brand,
+        _looks_like_marketing_slogan_name,
+        _food_local_name_denied,
+        _food_format_from_blob,
+        _food_format_compatible,
+        _is_generic_or_fake_rival_name,
+        _is_self_rival,
+        _market_area_from_client,
+    )
+
+    # Instantly hide brand-geo hallucinations + wrong food-format / wrong-vertical peers
+    # (e.g. burger brands for a cafe client, NetSol for Cheezious) without waiting for another intel run.
+    market_hint = _market_area_from_client(client) or "Pakistan"
+    dirty = (
+        await db.execute(
+            select(Competitor).where(
+                Competitor.client_id == client.id,
+                Competitor.agency_id == ctx.agency.id,
+                Competitor.is_tracking.is_(True),
+            )
+        )
+    ).scalars().all()
+    cleaned = 0
+    client_is_food = _looks_like_food_client(
+        client.name, client.industry, client.niche, client.notes, client.tagline
+    )
+    client_model = _business_model_from_client(client)
+    client_fmt = (
+        _food_format_from_blob(client.name, client.niche, client.industry, client.notes)
+        if client_is_food
+        else ""
+    )
+    for rival in dirty:
+        drop = _looks_like_brand_geo_hallucination(
+            client.name,
+            rival.name,
+            market_hint,
+            website=rival.website,
+            source="ai",
+        )
+        if not drop and client_fmt and client_fmt != "general":
+            rival_fmt = _food_format_from_blob(
+                rival.name, rival.description, rival.why_dangerous, rival.website
+            )
+            if rival_fmt != "general" and not _food_format_compatible(client_fmt, rival_fmt):
+                drop = True
+        # Known bad typo / wrong-vertical / wrong-geo / invented food names
+        rival_l = (rival.name or "").lower()
+        if "xinyaki" in rival_l:
+            drop = True
+        if not drop and (
+            _is_generic_or_fake_rival_name(rival.name)
+            or _looks_like_invented_food_domain(rival.name, rival.website)
+            or _is_self_rival(client.name, rival.name, website=rival.website, client_website=client.website)
+        ):
+            drop = True
+        if not drop and client_is_food:
+            if _looks_like_furniture_or_home_brand(
+                rival.name, rival.description, rival.why_dangerous, rival.website
+            ):
+                drop = True
+            elif _food_local_name_denied(rival.name, market_hint):
+                drop = True
+            elif _looks_like_software_peer_client(
+                rival.name, rival.description, rival.why_dangerous, rival.website
+            ):
+                drop = True
+            elif _looks_like_fmcg_or_snack_brand(
+                rival.name, rival.description, rival.why_dangerous, rival.website
+            ) or _looks_like_marketing_slogan_name(rival.name):
+                drop = True
+            elif _incompatible_peer(
+                client_model=client_model,
+                client_industry=client.industry or "",
+                client_niche=(client.niche or client.notes or ""),
+                rival_model="",
+                rival_industry="",
+                rival_blob=f"{rival.name} {rival.description or ''} {rival.why_dangerous or ''}",
+                client_name=client.name,
+            ):
+                drop = True
+        if drop:
+            rival.is_tracking = False
+            rival.is_pinned = False
+            cleaned += 1
+    if cleaned:
+        await db.commit()
 
     competitors = (
         await db.execute(
