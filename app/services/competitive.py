@@ -2741,40 +2741,66 @@ def _niche_competitor_queries(
 
 
 _SERP_NOISE_DOMAINS = {
+    # Software & SaaS review / directory aggregators
     "g2.com", "capterra.com", "getapp.com", "softwareadvice.com", "trustradius.com",
+    "crozdesk.com", "saashub.com", "alternativeto.net", "slashdot.org", "producthunt.com",
     "clutch.co", "goodfirms.co", "sortlist.com", "designrush.com", "upcity.com",
-    "linkedin.com", "facebook.com", "twitter.com", "x.com", "instagram.com", "youtube.com",
-    "tiktok.com", "vm.tiktok.com",
-    "wikipedia.org", "crunchbase.com", "bloomberg.com", "forbes.com", "techcrunch.com",
-    "medium.com", "reddit.com", "quora.com", "glassdoor.com", "indeed.com",
-    "producthunt.com", "alternativeto.net", "saashub.com", "slashdot.org",
+    "techbehemoths.com", "themanifest.com", "topdevelopers.co", "appfutura.com",
+    "extract.co", "wadline.com", "directory.com", "yellowpages.com", "yelp.com",
     "tripadvisor.com", "tripadvisor.com.pk", "wheree.com", "jagha.pk", "menuprices.pk",
-    "foodpanda.pk", "foodpanda.com", "foodiespakistan.pk",
-    # Blogs / galleries / CPG — not restaurant peers
-    "pakistantravelblog.com", "magnific.com", "pinterest.com", "blogspot.com",
-    "wordpress.com", "substack.com", "travelblog.org",
-    "dawnbread.com", "dawnbread.com.pk", "dawnfoods.com",
-    "google.com", "photos.google.com",
-    # Directories / listicles mistaken as software peers
-    "entasher.com", "clutch.co", "goodfirms.co", "sortlist.com",
-    "techbehemoths.com", "designrush.com", "upcity.com",
+    "foodpanda.pk", "foodpanda.com", "foodiespakistan.pk", "trustpilot.com",
+    "sitejabber.com", "glassdoor.com", "indeed.com", "zoominfo.com", "crunchbase.com",
+    "pitchbook.com", "owler.com", "cbinsights.com", "zippia.com", "comparably.com",
+    # Social & video platforms
+    "linkedin.com", "facebook.com", "twitter.com", "x.com", "instagram.com", "youtube.com",
+    "tiktok.com", "vm.tiktok.com", "pinterest.com", "reddit.com", "quora.com",
+    "threads.net", "vimeo.com", "dailymotion.com",
+    # Major news & media publications (articles/listicles, not SaaS/agency rivals)
+    "forbes.com", "techcrunch.com", "theverge.com", "wired.com", "venturebeat.com",
+    "zdnet.com", "cnet.com", "businessinsider.com", "bloomberg.com", "reuters.com",
+    "nytimes.com", "wsj.com", "bbc.com", "cnn.com", "mashable.com", "propakistani.pk",
+    "techinasia.com", "tribune.com.pk", "dawn.com", "geo.tv", "thenews.com.pk",
+    "dailymail.co.uk", "theguardian.com", "huffpost.com", "economist.com",
+    "entrepreneur.com", "inc.com", "fastcompany.com", "hackernews.com", "ycombinator.com",
+    # General blog hosting / publishing platforms
+    "medium.com", "substack.com", "dev.to", "hashnode.dev", "hashnode.com",
+    "wordpress.com", "wordpress.org", "blogspot.com", "tumblr.com", "ghost.io",
+    "beehiiv.com", "wixsite.com", "weebly.com", "pakistantravelblog.com",
+    "travelblog.org", "magnific.com", "dawnbread.com", "dawnbread.com.pk",
+    "dawnfoods.com", "google.com", "photos.google.com", "drive.google.com",
+    "docs.google.com", "notion.site", "gitbook.io", "wikipedia.org", "wikihow.com",
+    "github.com", "gitlab.com", "bitbucket.org", "sourceforge.net",
 }
 
 # Host markers (substring) for content / grocery sites mistaken as rivals
 _CONTENT_OR_CPG_HOST_MARKERS = (
     "travelblog", "foodblog", "blog", "magazine", "recipes", "photos",
-    "bread", "bakerywholesale", "flour", "grocery",
+    "bread", "bakerywholesale", "flour", "grocery", "review", "directory",
+    "news", "press", "media", "portal", "wiki",
 )
 _CPG_PATH_MARKERS = ("/product/", "/products/", "/shop/", "/sku/")
 _DIRECTORY_OR_LISTICLE_PATH_MARKERS = (
-    "/companies/", "/company/", "/agencies/", "/top-", "/best-",
-    "/10-top-", "/software-companies", "/it-companies", "/list-of-",
+    "/companies/", "/company/", "/agencies/", "/agency/", "/top-", "/best-",
+    "/10-top-", "/software-companies", "/it-companies", "/list-of-", "/directory/",
+    "/blog/", "/blogs/", "/post/", "/posts/", "/article/", "/articles/", "/news/",
+    "/story/", "/stories/", "/review/", "/reviews/", "/vs/", "/compare/",
+    "/comparison/", "/list/", "/lists/", "/guides/", "/guide/", "/insights/",
+    "/trends/", "/category/", "/tag/", "/author/", "/feed/", "/press-release/",
+    "/how-to-", "/tutorials/", "/case-studies/", "/ranking/",
 )
 _CITY_IN_TITLE_RE = re.compile(
-    r"\b(food|shawarma|pizza|burger|biryani|cafe|restaurant)s?\s+in\s+"
+    r"\b(food|shawarma|pizza|burger|biryani|cafe|restaurant|software|agency|company|firm|solutions)s?\s+in\s+"
     r"(islamabad|lahore|karachi|rawalpindi|peshawar|multan|faisalabad|pakistan|"
-    r"dubai|london|toronto|new york)\b",
+    r"dubai|riyadh|london|toronto|new york|california|texas|singapore|berlin)\b",
     re.I,
+)
+
+_BLOG_OR_ARTICLE_TITLE_PATTERNS = re.compile(
+    r"^(top\s+\d+|\d+\s+best|\d+\s+top|how\s+to|why\s+you|what\s+is|the\s+best|the\s+top|"
+    r"ultimate\s+guide|complete\s+guide|best\s+alternatives|top\s+alternatives|"
+    r"list\s+of\s+top|list\s+of\s+best|best\s+companies\s+in|top\s+agencies\s+in|"
+    r".*\s+(vs|versus|compared\s+to|alternative\s+to|review\s+and\s+pricing|reviews\s+and\s+pricing))\b",
+    re.IGNORECASE,
 )
 
 
@@ -2788,34 +2814,62 @@ def _is_serp_noise_domain(url: str) -> bool:
     return False
 
 
+def _is_blog_or_article_url(url: str, title: str = "") -> bool:
+    """True if URL or title represents a blog post, article, news story, or listicle directory."""
+    if not url:
+        return False
+    if _is_serp_noise_domain(url):
+        return True
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url if "://" in url else f"https://{url}")
+        path = (parsed.path or "").lower()
+        if any(p in path for p in _DIRECTORY_OR_LISTICLE_PATH_MARKERS):
+            return True
+        if re.search(r"/\d{4}/\d{2}/", path) or re.search(r"/(how-to|best|top|guide)-", path):
+            return True
+    except Exception:
+        pass
+    if title and _BLOG_OR_ARTICLE_TITLE_PATTERNS.search(title.strip()):
+        return True
+    return False
+
+
 def _looks_like_content_or_cpg_noise(name: str, website: str | None = None) -> bool:
     """
-    True for travel blogs, photo galleries, bread/CPG product pages —
-    e.g. 'Yemeni Food in Islamabad', 'Pakistani shawarma Photos', 'Dawn Shawarma' (bread).
+    True for travel blogs, photo galleries, listicles, bread/CPG product pages —
+    e.g. 'Yemeni Food in Islamabad', 'Pakistani shawarma Photos', 'Dawn Shawarma' (bread),
+    'Top 10 CRM Software in 2026'.
     """
     raw = _as_str(name).strip()
     key = re.sub(r"\s+", " ", raw.lower()).strip()
     if not key:
         return True
+    # Article title patterns
+    if _BLOG_OR_ARTICLE_TITLE_PATTERNS.search(raw):
+        return True
     # Photo / gallery titles
     if re.search(r"\bphotos?\b|\bgallery\b|\bimages?\b", key):
         return True
-    # Travel/listicle: "Yemeni Food in Islamabad"
+    # Travel/listicle: "Yemeni Food in Islamabad", "Top Software Companies in Lahore"
     if _CITY_IN_TITLE_RE.search(key):
         return True
     # Explicit blog/listicle cues in the name
-    if any(tok in key for tok in (" food blog", "travel blog", "best places", "things to eat")):
+    if any(tok in key for tok in (
+        " food blog", "travel blog", "best places", "things to eat", "top 10", "top 5",
+        "best software", "complete guide", "alternatives to", "vs ", " versus "
+    )):
         return True
 
     website = _as_str(website).strip().lower()
     if not website:
-        # Name-only: Dawn Shawarma alone is ambiguous — only block with site cues
         return False
+    if _is_blog_or_article_url(website, name):
+        return True
     host = _domain_of(website)
     path = ""
     try:
         from urllib.parse import urlparse
-
         path = (urlparse(website if "://" in website else f"https://{website}").path or "").lower()
     except Exception:
         path = ""
@@ -2823,8 +2877,7 @@ def _looks_like_content_or_cpg_noise(name: str, website: str | None = None) -> b
     if _is_serp_noise_domain(website):
         return True
     if any(m in host for m in _CONTENT_OR_CPG_HOST_MARKERS):
-        # Allow real restaurants whose host merely contains "photos" only if name looks like a brand
-        if "photos" in host or "blog" in host or "travel" in host:
+        if "photos" in host or "blog" in host or "travel" in host or "news" in host or "magazine" in host:
             return True
         if "bread" in host:
             return True
@@ -2832,7 +2885,6 @@ def _looks_like_content_or_cpg_noise(name: str, website: str | None = None) -> b
         tok in host for tok in ("bread", "dawn", "foods", "grocery", "wholesale")
     ):
         return True
-    # Directory / ranking listicles mistaken as the rival company itself
     if any(m in path for m in _DIRECTORY_OR_LISTICLE_PATH_MARKERS):
         return True
     if "dawn" in key and "shawarma" in key and "bread" in host:
@@ -2965,7 +3017,7 @@ def _filter_niche_competitors(
             name, website
         ):
             continue
-        if website and _is_serp_noise_domain(website):
+        if website and (_is_serp_noise_domain(website) or _is_blog_or_article_url(website, name)):
             continue
         if _looks_like_content_or_cpg_noise(name, website):
             continue
@@ -3193,7 +3245,7 @@ def _competitors_from_serp(organic: list[dict], client_name: str) -> list[dict]:
         snippet = _as_str(item.get("snippet"))
         if not title or not link:
             continue
-        if _is_serp_noise_domain(link):
+        if _is_serp_noise_domain(link) or _is_blog_or_article_url(link, title):
             continue
         name = title.split("|")[0].split("-")[0].split("–")[0].strip()
         # Drop marketing suffixes: "Eastern Oven Your Go-To Pizza Haven..."
@@ -3217,10 +3269,10 @@ def _competitors_from_serp(organic: list[dict], client_name: str) -> list[dict]:
             flags=re.I,
         ).strip()
         name = _clean_rival_display_name(name)
-        # If title is still a category phrase, prefer the domain brand
-        if _is_generic_or_fake_rival_name(name) or len(name) > 55:
+        # If title is still a category phrase or article phrase, prefer the domain brand
+        if _is_generic_or_fake_rival_name(name) or len(name) > 55 or _is_blog_or_article_url(link, name):
             host_brand = _brand_guess_from_host(link)
-            if host_brand and not _is_generic_or_fake_rival_name(host_brand):
+            if host_brand and not _is_generic_or_fake_rival_name(host_brand) and not _is_blog_or_article_url(link, host_brand):
                 name = host_brand
             else:
                 continue
@@ -4419,17 +4471,39 @@ async def run_competitive_pack(
     baseline_set = {_as_str(n).lower().strip() for n in baseline_names if _as_str(n)}
     if mode == "add" and not baseline_set:
         baseline_set = {_as_str(c.name).lower().strip() for c in competitors if _as_str(c.name)}
+    # Scrape all candidates concurrently with concurrency limiter (up to 5 parallel)
+    async def _scrape_candidate(comp: Competitor) -> tuple[str, dict]:
+        if not comp.website:
+            return comp.id, {}
+        already = bool(comp.feature_list) and bool(comp.description or comp.why_dangerous)
+        if already:
+            return comp.id, {}
+        try:
+            res = await scrape_website(db, agency.id, comp.website)
+            return comp.id, res if isinstance(res, dict) else {}
+        except Exception as err:
+            logger.warning("Scrape candidate failed for %s: %s", comp.website, err)
+            return comp.id, {}
+
+    sem = asyncio.Semaphore(5)
+    async def _sem_scrape(c: Competitor):
+        async with sem:
+            return await _scrape_candidate(c)
+
+    scrape_results = await asyncio.gather(*[_sem_scrape(c) for c in competitors], return_exceptions=True)
+    scraped_map: dict[str, dict] = {}
+    for item in scrape_results:
+        if isinstance(item, tuple) and len(item) == 2:
+            scraped_map[item[0]] = item[1]
+
     for idx, competitor in enumerate(competitors):
         # Normalize stored website so UI links open correctly
         if competitor.website:
             competitor.website = _normalize_website(competitor.website) or competitor.website
-        site_data = {}
-        # Skip slow re-scrapes when we already have usable rival intel; cap fresh scrapes for speed
         already_enriched = bool(competitor.feature_list) and bool(
             competitor.description or competitor.why_dangerous
         )
-        if competitor.website and not already_enriched and idx < min(count, 3):
-            site_data = await scrape_website(db, agency.id, competitor.website)
+        site_data = scraped_map.get(competitor.id, {})
         site_md = (site_data.get("markdown") or "")[:3500]
         if already_enriched and (competitor.overlap_score or 0) >= 55:
             # Fast path: reuse prior enrich instead of another scrape+LLM round-trip
@@ -4629,6 +4703,7 @@ async def run_competitive_pack(
             curated
             or (bool(hq_key) and bool(market_key) and hq_key == market_key)
             or _mentions_target_market(site_geo_blob, competitor.website, required_market)
+            or _host_matches_tlds(_domain_of(competitor.website or ""), _COUNTRY_TLDS.get(market_key or "", set()))
         )
         wrong_market = (
             scope == "local"
@@ -4639,11 +4714,10 @@ async def run_competitive_pack(
                 analysis.get("same_market") is False
                 or site_conflict
                 or _mentions_conflicting_country(site_geo_blob, competitor.website, required_market)
-                or (bool(hq_key) and bool(market_key) and hq_key != market_key)
-                or not has_local_proof
+                or (bool(hq_key) and bool(market_key) and hq_key != market_key and not has_local_proof)
             )
         )
-        # Soften dead-site drop when Firecrawl fails but HQ/market already look local
+        # Only drop truly dead / parked domains with no content and error status
         dead_site = (
             not competitor.is_pinned
             and not curated
@@ -4652,13 +4726,7 @@ async def run_competitive_pack(
                 or (
                     bool(competitor.website)
                     and _site_looks_parked_or_empty(site_md)
-                    and site_data.get("status") != "ok"
-                )
-                or (
-                    bool(competitor.website)
-                    and site_data.get("status") == "error"
-                    and not site_md.strip()
-                    and not has_local_proof
+                    and site_data.get("status") not in {"ok", "skipped"}
                 )
             )
         )
@@ -4670,7 +4738,7 @@ async def run_competitive_pack(
             and not _site_supports_software_peer(site_md)
         )
         fake_brand = (not competitor.is_pinned) and _is_generic_or_fake_rival_name(competitor.name)
-        site_host_noise = bool(competitor.website and _is_serp_noise_domain(competitor.website))
+        site_host_noise = bool(competitor.website and (_is_serp_noise_domain(competitor.website) or _is_blog_or_article_url(competitor.website, competitor.name)))
         off_niche = (
             not competitor.is_pinned
             and (
@@ -4683,11 +4751,11 @@ async def run_competitive_pack(
                 or wrong_market
                 or dead_site
                 or weak_software_peer
-                or ((competitor.overlap_score or 0) < 55 and not curated)
+                or ((competitor.overlap_score or 0) < 50 and not curated)
                 or (
                     not curated
                     and competitor.threat_level == "low"
-                    and (competitor.overlap_score or 0) < 65
+                    and (competitor.overlap_score or 0) < 60
                     and analysis.get("is_leading_rival") is False
                 )
             )

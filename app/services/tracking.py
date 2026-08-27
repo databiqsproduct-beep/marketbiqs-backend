@@ -109,26 +109,126 @@ async def ensure_scrape_quota(db: AsyncSession, agency_id: str) -> None:
         raise ValueError("Scrape quota exceeded. Purchase extra scrape units on Billing.")
 
 
+import html
+import re
+
+async def _scrape_direct_html(url: str) -> dict[str, Any]:
+    """Fast, direct HTTP scraper fallback when Firecrawl is unavailable or times out."""
+    clean_url = url.strip()
+    if not clean_url.startswith(("http://", "https://")):
+        clean_url = f"https://{clean_url}"
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=14, follow_redirects=True, verify=False) as client:
+            response = await client.get(clean_url, headers=headers)
+            if response.status_code >= 400:
+                return {
+                    "url": clean_url,
+                    "markdown": "",
+                    "status": "error",
+                    "detail": f"HTTP {response.status_code}",
+                }
+            raw_html = response.text
+            if not raw_html:
+                return {"url": clean_url, "markdown": "", "status": "empty"}
+
+            # Strip scripts, styles, svg, and comments
+            text_cleaned = re.sub(r"<!--.*?-->", "", raw_html, flags=re.DOTALL)
+            text_cleaned = re.sub(
+                r"<(script|style|svg|noscript|header|footer|nav)\b[^>]*>.*?</\1>",
+                " ",
+                text_cleaned,
+                flags=re.DOTALL | re.IGNORECASE,
+            )
+
+            # Extract Title
+            title_match = re.search(r"<title\b[^>]*>(.*?)</title>", text_cleaned, flags=re.IGNORECASE | re.DOTALL)
+            title = html.unescape(title_match.group(1)).strip() if title_match else ""
+
+            # Extract Meta Description
+            desc_match = re.search(
+                r'<meta\s+[^>]*(?:name|property)=["\'](?:description|og:description)["\'][^>]*content=["\'](.*?)["\']',
+                raw_html,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            if not desc_match:
+                desc_match = re.search(
+                    r'<meta\s+[^>]*content=["\'](.*?)["\'][^>]*(?:name|property)=["\'](?:description|og:description)["\']',
+                    raw_html,
+                    flags=re.IGNORECASE | re.DOTALL,
+                )
+            description = html.unescape(desc_match.group(1)).strip() if desc_match else ""
+
+            # Extract Headings h1-h3
+            headings = []
+            for h in re.finditer(r"<(h[1-3])\b[^>]*>(.*?)</\1>", text_cleaned, flags=re.IGNORECASE | re.DOTALL):
+                h_text = re.sub(r"<[^>]+>", " ", h.group(2))
+                h_clean = html.unescape(re.sub(r"\s+", " ", h_text)).strip()
+                if h_clean and len(h_clean) > 3 and h_clean not in headings:
+                    headings.append(h_clean)
+
+            # Extract visible text blocks
+            body_text = re.sub(r"<[^>]+>", " ", text_cleaned)
+            body_text = html.unescape(body_text)
+            body_text = re.sub(r"[ \t]+", " ", body_text)
+            lines = [line.strip() for line in body_text.splitlines() if line.strip() and len(line.strip()) > 20]
+            clean_body = "\n".join(lines[:40])
+
+            content_parts = []
+            if title:
+                content_parts.append(f"# {title}")
+            if description:
+                content_parts.append(f"**Overview**: {description}")
+            if headings:
+                content_parts.append("**Key Sections & Features**:\n" + "\n".join(f"- {h}" for h in headings[:12]))
+            if clean_body:
+                content_parts.append(clean_body)
+
+            markdown = "\n\n".join(content_parts).strip()
+            return {
+                "url": str(response.url),
+                "markdown": markdown[:12000],
+                "status": "ok",
+                "source": "direct_http",
+            }
+    except Exception as exc:
+        return {"url": clean_url, "markdown": "", "status": "error", "detail": str(exc)[:400]}
+
+
 async def scrape_website(db: AsyncSession, agency_id: str, url: str) -> dict[str, Any]:
+    if not url:
+        return {"url": url, "markdown": "", "status": "skipped", "note": "Missing URL"}
     key = await resolve_firecrawl(db, agency_id)
-    if not key or not url:
-        return {"url": url, "markdown": "", "status": "skipped", "note": "Missing Firecrawl key or URL"}
+    if not key:
+        # Fallback directly to direct HTTP scraper
+        return await _scrape_direct_html(url)
     try:
         await ensure_scrape_quota(db, agency_id)
-        async with httpx.AsyncClient(timeout=22) as client:
+        async with httpx.AsyncClient(timeout=20) as client:
             response = await client.post(
                 "https://api.firecrawl.dev/v1/scrape",
                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
                 json={"url": url, "formats": ["markdown"], "onlyMainContent": True},
             )
             if response.status_code >= 400:
-                return {"url": url, "status": "error", "detail": response.text[:500]}
+                logger.warning("Firecrawl returned %s for %s — falling back to direct HTTP scrape", response.status_code, url)
+                return await _scrape_direct_html(url)
             data = response.json()
             await track_usage(db, agency_id, "firecrawl_scrape", 1, {"url": url})
             markdown = ((data.get("data") or {}).get("markdown")) or ""
-            return {"url": url, "markdown": markdown[:12000], "status": "ok"}
+            if not markdown.strip():
+                return await _scrape_direct_html(url)
+            return {"url": url, "markdown": markdown[:12000], "status": "ok", "source": "firecrawl"}
     except Exception as exc:
-        return {"url": url, "markdown": "", "status": "error", "detail": str(exc)[:500]}
+        logger.warning("Firecrawl scrape failed for %s (%s) — falling back to direct HTTP scrape", url, exc)
+        return await _scrape_direct_html(url)
 
 
 async def serp_visibility(
