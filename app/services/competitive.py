@@ -1116,6 +1116,10 @@ def _rival_fits_run_scope(
         return True
     if _mentions_target_market(blob, website, market_l):
         return True
+    if hq_key and market_key and hq_key == market_key:
+        return True
+    if _host_matches_tlds(_domain_of(website or ""), _COUNTRY_TLDS.get(market_key or "", set())):
+        return True
     if _is_curated_seed_rival(name, market_l, kind="food") or _is_curated_seed_rival(
         name, market_l, kind="software"
     ):
@@ -3118,23 +3122,21 @@ def _filter_niche_competitors(
             market_key = _normalize_country_key(market_l)
             if hq_key and market_key and hq_key != market_key:
                 continue
-            has_local_signal = _mentions_target_market(blob, website, market_l)
+            has_local_signal = (
+                _mentions_target_market(blob, website, market_l)
+                or (bool(hq_key) and bool(market_key) and hq_key == market_key)
+                or _host_matches_tlds(_domain_of(website or ""), _COUNTRY_TLDS.get(market_key or "", set()))
+            )
             if not has_local_signal:
-                hq_key = _normalize_country_key(hq_country)
-                market_key = _normalize_country_key(market_l)
-                if hq_key and market_key and hq_key == market_key:
-                    has_local_signal = True
-            if not has_local_signal:
-                # SERP rows are provisional — pack scrape verifies HQ later
                 src = _as_str(item.get("source")).lower()
-                if src == "serp":
-                    score -= 8
+                if src in {"serp", "ai_same_tier", "ai"}:
+                    # Targeted local prompts / SERP are geo-scoped
+                    has_local_signal = True
+                    score -= 4
                 elif src == "seed":
-                    # Curated local peers already market-scoped
                     has_local_signal = True
                     score += 6
                 else:
-                    # AI must cite the country/city; bare same_market=true is not enough
                     continue
 
         # Soft boosts for explicit fit signals
@@ -3401,7 +3403,23 @@ async def _ai_propose_same_tier_peers(
         )[:7000],
         temperature=0.2,
     )
-    rows = [c for c in (pack.get("competitors") or []) if isinstance(c, dict)] if isinstance(pack, dict) else []
+    raw_list = (
+        pack.get("competitors")
+        or pack.get("peers")
+        or pack.get("rivals")
+        or pack.get("items")
+        if isinstance(pack, dict)
+        else (pack if isinstance(pack, list) else [])
+    )
+    rows: list[dict] = []
+    for c in (raw_list or []):
+        if isinstance(c, dict):
+            c_copy = {**c, "source": "ai_same_tier"}
+            if not c_copy.get("headquarters_country") and focus:
+                c_copy["headquarters_country"] = focus
+            if not c_copy.get("overlap_score"):
+                c_copy["overlap_score"] = 72.0
+            rows.append(c_copy)
     food_tier = (
         _food_tier_from_blob(client.name, client.niche, client.industry, business_model)
         if is_food
@@ -3414,7 +3432,7 @@ async def _ai_propose_same_tier_peers(
         niche=_as_str(client.niche),
         industry=_as_str(client.industry),
         business_model=_as_str(business_model),
-        min_overlap=55.0,
+        min_overlap=45.0,
         limit=max(needed * 2, needed),
         require_local_market=(scope == "local"),
         client_food_tier=food_tier,
@@ -3698,6 +3716,59 @@ async def enrich_client_profile(
             "business_model": business_model,
         }
 
+    existing_keys: set[str] = set()
+    for row in (existing_early if mode == "replace" else tracking_existing_early):
+        if mode == "replace" and not row.is_pinned:
+            continue
+        existing_keys |= _rival_keys(row.name, row.website)
+
+    def _pick_fresh(items: list) -> list[dict]:
+        fresh: list[dict] = []
+        seen: set[str] = set()
+        for c in items:
+            if not isinstance(c, dict):
+                continue
+            name = _clean_rival_display_name(_as_str(c.get("name")).strip())
+            website = _normalize_website(_as_str(c.get("website")) or None)
+            item_keys = _rival_keys(name, website)
+            if not name or not item_keys or item_keys & existing_keys or item_keys & seen:
+                continue
+            if _is_generic_or_fake_rival_name(name):
+                if _as_str(c.get("source")).lower() != "seed" or _looks_like_recipe_or_menu_item_name(name):
+                    continue
+            if _looks_like_content_or_cpg_noise(name, website):
+                continue
+            if _is_self_rival(client.name, name, website=website, client_website=client.website):
+                continue
+            if _looks_like_brand_geo_hallucination(
+                client.name,
+                name,
+                local_focus or market_area or country,
+                website=website,
+                source=_as_str(c.get("source")) or "ai",
+            ):
+                continue
+            if not _rival_fits_run_scope(
+                name=name,
+                website=website,
+                headquarters=_as_str(c.get("headquarters_country") or c.get("headquarters")),
+                description=_as_str(c.get("why_relevant") or c.get("description")),
+                why=_as_str(c.get("why_relevant")),
+                scope=scope,
+                market=(local_focus or market_area or country) if scope == "local" else (local_focus or ""),
+                client_name=client.name,
+                strict=False,
+            ):
+                continue
+            if not website:
+                continue
+            seen |= item_keys
+            c = {**c, "name": name}
+            fresh.append(c)
+            if len(fresh) >= count:
+                break
+        return fresh
+
     _is_food_client_prompt = _looks_like_food_client(client.name, client.niche, client.industry)
     _food_fmt_prompt = (
         _food_format_from_blob(client.name, client.niche, client.industry, business_model)
@@ -3889,7 +3960,7 @@ async def enrich_client_profile(
                 break
         competitor_items.extend(_competitors_from_serp(serp.get("organic") or [], client.name))
         competitor_items = _apply_relevance_filter(competitor_items)
-        if len(competitor_items) >= count:
+        if len(_pick_fresh(competitor_items)) >= count:
             break
 
     logger.info(
@@ -3946,13 +4017,14 @@ async def enrich_client_profile(
     competitor_items = _apply_relevance_filter(competitor_items)
 
     # Gap-fill remaining slots with same-tier AI peers (NOT curated seed lists)
-    if len(competitor_items) < count:
-        already = already_have_names + [_as_str(c.get("name")) for c in competitor_items]
+    fresh_so_far = _pick_fresh(competitor_items)
+    if len(fresh_so_far) < count:
+        already = already_have_names + [_as_str(c.get("name")) for c in fresh_so_far]
         fill_rows = await _ai_propose_same_tier_peers(
             db,
             agency.id,
             client,
-            needed=count - len(competitor_items),
+            needed=count - len(fresh_so_far),
             already_have=already,
             scope=scope,
             market_focus=(local_focus or market_area or country) if scope == "local" else "global / international",
@@ -3962,14 +4034,16 @@ async def enrich_client_profile(
         competitor_items.extend(fill_rows)
         competitor_items = _apply_relevance_filter(competitor_items)
 
+    fresh_so_far = _pick_fresh(competitor_items)
     # Second AI pass if still short of the slider count (not capped at 4)
-    if len(competitor_items) < count:
+    if len(fresh_so_far) < count:
+        already = already_have_names + [_as_str(c.get("name")) for c in fresh_so_far]
         fill_rows = await _ai_propose_same_tier_peers(
             db,
             agency.id,
             client,
-            needed=count - len(competitor_items),
-            already_have=already_have_names + [_as_str(c.get("name")) for c in competitor_items],
+            needed=count - len(fresh_so_far),
+            already_have=already,
             scope=scope,
             market_focus=(local_focus or market_area or country) if scope == "local" else "global / international",
             business_model=business_model,
@@ -3982,13 +4056,14 @@ async def enrich_client_profile(
     is_food_client = _looks_like_food_client(
         client.name, client.industry, client.niche, business_model, site_md[:800]
     )
+    fresh_so_far = _pick_fresh(competitor_items)
     if (
         is_food_client
         and scope == "local"
         and local_focus
-        and len(competitor_items) < count
+        and len(fresh_so_far) < count
     ):
-        already = already_have_names + [_as_str(c.get("name")) for c in competitor_items]
+        already = already_have_names + [_as_str(c.get("name")) for c in fresh_so_far]
         food_tier = _food_tier_from_blob(client.name, client.niche, client.industry, business_model)
         seed_rows = _seed_local_qsr_rivals(
             local_focus,
@@ -4138,60 +4213,6 @@ async def enrich_client_profile(
     # add: find exactly `count` NEW rivals on top of previous ones.
     # replace: rebuild up to `count` auto rivals (may re-enable previously untracked rows; keep pinned).
     ai_slots = count
-    existing_keys = set()
-    for row in (existing if mode == "replace" else protected_existing):
-        if mode == "replace" and not row.is_pinned:
-            continue
-        existing_keys |= _rival_keys(row.name, row.website)
-
-    def _pick_fresh(items: list) -> list[dict]:
-        fresh: list[dict] = []
-        seen: set[str] = set()
-        for c in items:
-            if not isinstance(c, dict):
-                continue
-            name = _clean_rival_display_name(_as_str(c.get("name")).strip())
-            website = _normalize_website(_as_str(c.get("website")) or None)
-            item_keys = _rival_keys(name, website)
-            if not name or not item_keys or item_keys & existing_keys or item_keys & seen:
-                continue
-            if _is_generic_or_fake_rival_name(name):
-                # Seeds are curated; still drop recipe/SEO titles if a seed name was polluted
-                if _as_str(c.get("source")).lower() != "seed" or _looks_like_recipe_or_menu_item_name(name):
-                    continue
-            if _looks_like_content_or_cpg_noise(name, website):
-                continue
-            if _is_self_rival(client.name, name, website=website, client_website=client.website):
-                continue
-            if _looks_like_brand_geo_hallucination(
-                client.name,
-                name,
-                local_focus or market_area or country,
-                website=website,
-                source=_as_str(c.get("source")) or "ai",
-            ):
-                continue
-            if not _rival_fits_run_scope(
-                name=name,
-                website=website,
-                headquarters=_as_str(c.get("headquarters_country") or c.get("headquarters")),
-                description=_as_str(c.get("why_relevant") or c.get("description")),
-                why=_as_str(c.get("why_relevant")),
-                scope=scope,
-                market=(local_focus or market_area or country) if scope == "local" else (local_focus or ""),
-                client_name=client.name,
-                strict=False,
-            ):
-                continue
-            if not website:
-                continue
-            seen |= item_keys
-            c = {**c, "name": name}
-            fresh.append(c)
-            if len(fresh) >= ai_slots:
-                break
-        return fresh
-
     fresh_items = _pick_fresh(competitor_items)
     # If SERP/AI first pass left us short of the slider count, ask AI (+ seeds last) again
     if len(fresh_items) < ai_slots:

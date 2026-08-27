@@ -359,3 +359,46 @@ class LocalSeedTests(unittest.TestCase):
         self.assertTrue(_peer_scale_compatible(_PEER_BOUTIQUE, _PEER_MID))
         self.assertTrue(_peer_scale_compatible(_PEER_ENTERPRISE, _PEER_ENTERPRISE))
 
+    def test_rival_fits_run_scope_market_and_tld(self):
+        from app.services.competitive import _rival_fits_run_scope
+
+        # Exact matching HQ country
+        self.assertTrue(
+            _rival_fits_run_scope(
+                name="Discretelogix",
+                website="https://discretelogix.com",
+                headquarters="Pakistan",
+                scope="local",
+                market="Pakistan",
+                client_name="Systems Limited",
+                strict=True,
+            )
+        )
+
+        # Matching TLD (.pk)
+        self.assertTrue(
+            _rival_fits_run_scope(
+                name="DevTech Solutions",
+                website="https://devtech.com.pk",
+                headquarters=None,
+                scope="local",
+                market="Pakistan",
+                client_name="Systems Limited",
+                strict=True,
+            )
+        )
+
+        # Conflicting country rejected
+        self.assertFalse(
+            _rival_fits_run_scope(
+                name="Infosys",
+                website="https://infosys.com",
+                headquarters="India",
+                scope="local",
+                market="Pakistan",
+                client_name="Systems Limited",
+                strict=True,
+            )
+        )
+
+
