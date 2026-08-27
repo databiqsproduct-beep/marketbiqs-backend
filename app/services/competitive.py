@@ -1111,20 +1111,7 @@ def _rival_fits_run_scope(
     market_key = _normalize_country_key(market_l)
     if hq_key and market_key and hq_key != market_key:
         return False
-    if not strict:
-        # Pre-enrich: only drop clear mismatches; thin local peers may still prove out
-        return True
-    if _mentions_target_market(blob, website, market_l):
-        return True
-    if hq_key and market_key and hq_key == market_key:
-        return True
-    if _host_matches_tlds(_domain_of(website or ""), _COUNTRY_TLDS.get(market_key or "", set())):
-        return True
-    if _is_curated_seed_rival(name, market_l, kind="food") or _is_curated_seed_rival(
-        name, market_l, kind="software"
-    ):
-        return True
-    return False
+    return True
 
 
 def _serp_gl_for_market(market: str) -> str | None:
@@ -4307,7 +4294,7 @@ async def enrich_client_profile(
     # Enforce this run's local/global filter on the tracked list (UI shows is_tracking only)
     scope_market = (country or market_area) if scope == "local" else (country or market_area or "")
     for rival in existing:
-        if rival.is_pinned:
+        if rival.is_pinned or mode == "add":
             continue
         if not _rival_fits_run_scope(
             name=_as_str(rival.name),
@@ -4806,7 +4793,7 @@ async def run_competitive_pack(
                     )
                 )
             )
-            if mode == "add" and name_key in baseline_set and not hard_drop:
+            if mode == "add" and not hard_drop:
                 competitor.is_tracking = True
                 if (competitor.overlap_score or 0) < 55:
                     competitor.overlap_score = 70.0
@@ -5383,7 +5370,7 @@ async def run_competitive_pack(
     for rival in kept:
         name_key = _as_str(rival.name).lower().strip()
         is_baseline = mode == "add" and name_key in baseline_set
-        if is_baseline and not _hard_junk_rival(rival):
+        if (mode == "add" or is_baseline) and not _hard_junk_rival(rival):
             rival.is_tracking = True
             filtered_kept.append(rival)
             continue
