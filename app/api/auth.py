@@ -28,6 +28,17 @@ def _agency_for_mode(name: str, slug: str, workspace_mode: str) -> Agency:
         slug=slug,
         workspace_mode=mode,
         plan=plan,
+        brand_color="#0F766E",
+        brand_secondary="#134E4A",
+        billing_status="active",
+        billing_model="plan",
+        cancel_at_period_end=False,
+        client_pack_count=0,
+        scrape_pack_count=0,
+        reports_used=0,
+        scrape_units_used=0,
+        byok_discount_percent=0,
+        onboarding_completed=False,
         included_clients=settings.included_clients if mode == WorkspaceMode.agency else settings.creator_included_clients,
         reports_quota=(
             settings.included_reports_per_month
@@ -147,6 +158,7 @@ async def bootstrap_agency(
         agency_id=agency.id,
         user_id=user.id,
         role=MemberRole.owner,
+        is_active=True,
     )
     db.add(membership)
     await db.flush()
