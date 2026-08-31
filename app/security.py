@@ -123,8 +123,15 @@ def decode_supabase_token(token: str) -> dict[str, Any]:
 
 
 def decode_access_token(token: str) -> dict[str, Any]:
-    """Verify Supabase Auth access token (login source of truth)."""
-    return decode_supabase_token(token)
+    """Verify Supabase Auth access token or local app JWT."""
+    try:
+        return decode_supabase_token(token)
+    except Exception:
+        pass
+    try:
+        return decode_token(token)
+    except Exception as exc:
+        raise ValueError("Invalid access token") from exc
 
 
 def encrypt_secret(value: str) -> str:

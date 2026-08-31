@@ -13,7 +13,8 @@ from app.schemas import (
     OnboardingRequest,
     UserOut,
 )
-from app.security import slugify
+from pydantic import BaseModel
+from app.security import create_access_token, slugify, verify_password
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 settings = get_settings()
@@ -52,6 +53,48 @@ async def _unique_agency_slug(db: AsyncSession, agency_name: str) -> str:
         slug = f"{base_slug}-{i}"
         i += 1
     return slug
+
+
+class LocalLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+@router.post("/login-local", response_model=dict)
+async def login_local(payload: LocalLoginRequest, db: AsyncSession = Depends(get_db)):
+    email = payload.email.strip().lower()
+    user = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
+    if not user or not user.hashed_password or not verify_password(payload.password, user.hashed_password):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
+
+    membership = (
+        await db.execute(
+            select(AgencyMember)
+            .options(selectinload(AgencyMember.agency))
+            .where(AgencyMember.user_id == user.id, AgencyMember.is_active.is_(True))
+        )
+    ).scalars().first()
+
+    agency = membership.agency if membership else None
+    role = membership.role.value if membership else None
+
+    token = create_access_token(
+        subject=user.id,
+        extra={
+            "email": user.email,
+            "name": user.full_name,
+            "agency_id": agency.id if agency else None,
+        },
+    )
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": UserOut.model_validate(user),
+        "agency": AgencyOut.model_validate(agency) if agency else None,
+        "role": role,
+        "needs_bootstrap": not bool(agency),
+    }
 
 
 @router.post("/register", status_code=status.HTTP_410_GONE)

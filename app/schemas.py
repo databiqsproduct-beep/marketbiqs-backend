@@ -102,6 +102,8 @@ class ClientCreate(BaseModel):
 class ClientUpdate(BaseModel):
     name: str | None = None
     industry: str | None = None
+    niche: str | None = None
+    tagline: str | None = None
     website: str | None = None
     logo_url: str | None = None
     notes: str | None = None
