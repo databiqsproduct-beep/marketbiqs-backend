@@ -15,9 +15,9 @@ class Settings(BaseSettings):
     database_url: str = ""
     cors_origins: str = (
         "http://localhost:3000,http://127.0.0.1:3000,"
-        "https://marketbiqsfrontend-production.up.railway.app"
+        "https://marketbiqs-frontend-production.up.railway.app"
     )
-    frontend_url: str = "https://marketbiqsfrontend-production.up.railway.app"
+    frontend_url: str = "https://marketbiqs-frontend-production.up.railway.app"
     api_base_url: str = "http://localhost:8000"
 
     # Primary Supabase access (same vars for localhost + production)

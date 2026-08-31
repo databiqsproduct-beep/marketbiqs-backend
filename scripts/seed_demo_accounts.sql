@@ -101,10 +101,11 @@ ON CONFLICT (agency_id, user_id) DO UPDATE SET
   role = 'analyst',
   is_active = TRUE;
 
--- 6. SEED CLIENT BRAND: Acme Retail Co.
+-- 6. SEED CLIENT BRAND 1: Acme Retail Co.
 INSERT INTO client_brands (
   id, agency_id, name, industry, niche, website, tagline,
-  delivery_channel, delivery_schedule_cron, is_active, created_at, updated_at
+  goals, delivery_emails, delivery_channel, delivery_schedule_cron,
+  is_active, created_at, updated_at
 )
 VALUES (
   'cli-acme-retail-001',
@@ -114,18 +115,23 @@ VALUES (
   'Sustainable Apparel & Activewear',
   'https://acmeretail.example.com',
   'High-performance eco-activewear for modern athletes.',
+  '[]'::json,
+  '["client@acmeretail.com"]'::json,
   'email',
   '0 9 * * 1',
   TRUE,
   NOW(),
   NOW()
 )
-ON CONFLICT DO NOTHING;
+ON CONFLICT (id) DO UPDATE SET
+  name = EXCLUDED.name,
+  tagline = EXCLUDED.tagline,
+  is_active = TRUE;
 
 -- 7. SEED COMPETITORS FOR ACME RETAIL CO.
 INSERT INTO competitors (
   id, agency_id, client_id, name, website, description,
-  threat_level, is_tracking, is_pinned, overlap_score, created_at
+  threat_level, is_tracking, is_pinned, overlap_score, feature_list, created_at
 )
 VALUES
 (
@@ -139,6 +145,7 @@ VALUES
   TRUE,
   TRUE,
   88.5,
+  '[]'::json,
   NOW()
 ),
 (
@@ -152,6 +159,7 @@ VALUES
   TRUE,
   FALSE,
   74.0,
+  '[]'::json,
   NOW()
 ),
 (
@@ -165,14 +173,16 @@ VALUES
   TRUE,
   FALSE,
   65.0,
+  '[]'::json,
   NOW()
 )
-ON CONFLICT DO NOTHING;
+ON CONFLICT (id) DO NOTHING;
 
 -- 8. SEED CLIENT BRAND 2: Databiqs Analytics
 INSERT INTO client_brands (
   id, agency_id, name, industry, niche, website, tagline,
-  delivery_channel, delivery_schedule_cron, is_active, created_at, updated_at
+  goals, delivery_emails, delivery_channel, delivery_schedule_cron,
+  is_active, created_at, updated_at
 )
 VALUES (
   'cli-databiqs-002',
@@ -182,13 +192,15 @@ VALUES (
   'Product Intelligence & Behavioral Analytics',
   'https://www.databiqs.com',
   'Real-time product analytics for modern product teams.',
+  '[]'::json,
+  '[]'::json,
   'email',
   '0 9 * * 1',
   TRUE,
   NOW(),
   NOW()
 )
-ON CONFLICT DO NOTHING;
+ON CONFLICT (id) DO NOTHING;
 
 -- Verification query:
 SELECT u.email, u.full_name, a.name AS agency, m.role
