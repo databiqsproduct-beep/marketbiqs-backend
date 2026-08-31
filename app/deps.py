@@ -72,6 +72,7 @@ async def _ensure_user_row(
         email=email,
         full_name=full_name,
         hashed_password=None,
+        is_active=True,
     )
     try:
         async with db.begin_nested():
