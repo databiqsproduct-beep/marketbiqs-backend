@@ -59,13 +59,14 @@ ON CONFLICT (slug) DO UPDATE SET
   onboarding_completed = TRUE;
 
 -- 3. LINK AGENCY OWNER MEMBERSHIP
-INSERT INTO agency_members (id, agency_id, user_id, role, is_active)
+INSERT INTO agency_members (id, agency_id, user_id, role, is_active, created_at)
 VALUES (
   'mem-agency-owner-001',
   'agc-demo-apex-001',
   'usr-agency-demo-001',
   'owner',
-  TRUE
+  TRUE,
+  NOW()
 )
 ON CONFLICT (agency_id, user_id) DO UPDATE SET
   role = 'owner',
@@ -87,13 +88,14 @@ ON CONFLICT (email) DO UPDATE SET
   is_active = TRUE;
 
 -- 5. LINK CLIENT USER MEMBERSHIP (Analyst / Client Lead)
-INSERT INTO agency_members (id, agency_id, user_id, role, is_active)
+INSERT INTO agency_members (id, agency_id, user_id, role, is_active, created_at)
 VALUES (
   'mem-client-analyst-001',
   'agc-demo-apex-001',
   'usr-client-demo-001',
   'analyst',
-  TRUE
+  TRUE,
+  NOW()
 )
 ON CONFLICT (agency_id, user_id) DO UPDATE SET
   role = 'analyst',
@@ -121,7 +123,10 @@ VALUES (
 ON CONFLICT DO NOTHING;
 
 -- 7. SEED COMPETITORS FOR ACME RETAIL CO.
-INSERT INTO competitors (id, agency_id, client_id, name, website, description, threat_level, is_tracking, is_pinned, overlap_score)
+INSERT INTO competitors (
+  id, agency_id, client_id, name, website, description,
+  threat_level, is_tracking, is_pinned, overlap_score, created_at
+)
 VALUES
 (
   'cmp-rival-athletic-001',
@@ -133,7 +138,8 @@ VALUES
   'high',
   TRUE,
   TRUE,
-  88.5
+  88.5,
+  NOW()
 ),
 (
   'cmp-ecoflex-001',
@@ -145,7 +151,8 @@ VALUES
   'medium',
   TRUE,
   FALSE,
-  74.0
+  74.0,
+  NOW()
 ),
 (
   'cmp-stride-001',
@@ -157,7 +164,8 @@ VALUES
   'medium',
   TRUE,
   FALSE,
-  65.0
+  65.0,
+  NOW()
 )
 ON CONFLICT DO NOTHING;
 
