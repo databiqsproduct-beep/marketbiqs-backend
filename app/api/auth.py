@@ -1,3 +1,4 @@
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -6,7 +7,7 @@ from sqlalchemy.orm import selectinload
 from app.database import get_db
 from app.config import get_settings
 from app.deps import AuthContext, get_auth_context, get_current_user
-from app.models import Agency, AgencyMember, MemberRole, PlanType, User, WorkspaceMode
+from app.models import Agency, AgencyMember, MemberRole, PlanType, User, WorkspaceMode, uid
 from app.schemas import (
     AgencyOut,
     BootstrapRequest,
@@ -23,7 +24,9 @@ settings = get_settings()
 def _agency_for_mode(name: str, slug: str, workspace_mode: str) -> Agency:
     mode = WorkspaceMode.agency if workspace_mode != "creator" else WorkspaceMode.creator
     plan = PlanType.agency if mode == WorkspaceMode.agency else PlanType.creator
+    now = datetime.utcnow()
     return Agency(
+        id=uid(),
         name=name,
         slug=slug,
         workspace_mode=mode,
@@ -53,6 +56,8 @@ def _agency_for_mode(name: str, slug: str, workspace_mode: str) -> Agency:
         budget_remaining_cents=(
             settings.agency_base_price if mode == WorkspaceMode.agency else settings.creator_base_price
         ),
+        created_at=now,
+        updated_at=now,
     )
 
 
@@ -155,10 +160,12 @@ async def bootstrap_agency(
     db.add(agency)
     await db.flush()
     membership = AgencyMember(
+        id=uid(),
         agency_id=agency.id,
         user_id=user.id,
         role=MemberRole.owner,
         is_active=True,
+        created_at=datetime.utcnow(),
     )
     db.add(membership)
     await db.flush()

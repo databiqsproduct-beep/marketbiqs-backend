@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 
 from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -73,6 +74,7 @@ async def _ensure_user_row(
         full_name=full_name,
         hashed_password=None,
         is_active=True,
+        created_at=datetime.utcnow(),
     )
     try:
         async with db.begin_nested():
