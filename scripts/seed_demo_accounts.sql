@@ -22,8 +22,11 @@ ON CONFLICT (email) DO UPDATE SET
 -- 2. SEED AGENCY WORKSPACE (Apex Growth Agency)
 INSERT INTO agencies (
   id, name, slug, workspace_mode, plan, brand_color, brand_secondary,
-  onboarding_completed, included_clients, reports_quota, scrape_quota,
-  budget_remaining_cents, created_at, updated_at
+  billing_status, billing_model, cancel_at_period_end,
+  included_clients, client_pack_count, scrape_pack_count,
+  reports_used, scrape_units_used, reports_quota, scrape_quota,
+  budget_remaining_cents, byok_discount_percent, onboarding_completed,
+  created_at, updated_at
 )
 VALUES (
   'agc-demo-apex-001',
@@ -33,16 +36,26 @@ VALUES (
   'agency',
   '#0F766E',
   '#134E4A',
-  TRUE,
+  'active',
+  'plan',
+  FALSE,
   20,
+  0,
+  0,
+  0,
+  0,
   100,
   1000,
   24900,
+  0,
+  TRUE,
   NOW(),
   NOW()
 )
 ON CONFLICT (slug) DO UPDATE SET
   name = EXCLUDED.name,
+  billing_status = 'active',
+  billing_model = 'plan',
   onboarding_completed = TRUE;
 
 -- 3. LINK AGENCY OWNER MEMBERSHIP
