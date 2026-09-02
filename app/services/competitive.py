@@ -502,7 +502,7 @@ _GLOBAL_RIVAL_BLOCKLIST = {
     "aws", "amazon web services", "oracle", "oracle ai", "sap", "sap leonardo", "deloitte",
     "pwc", "ey", "ernst & young", "kpmg", "cognizant", "infosys", "capgemini", "tcs",
     "tata consultancy", "wipro", "meta", "openai", "anthropic", "salesforce", "adobe",
-    "nvidia", "mckinsey", "bain", "bcg", "boston consulting", "slalom", "thoughtworks",
+    "nvidia", "mckinsey", "bain", "bcg", "boston consulting", "slalom",
     "manychat", "converse.ai", "inbenta",
 }
 
@@ -512,7 +512,7 @@ _GLOBAL_DOMAIN_BLOCKLIST = {
     "oracle.com", "sap.com", "deloitte.com", "pwc.com", "ey.com", "kpmg.com",
     "cognizant.com", "infosys.com", "capgemini.com", "tcs.com", "wipro.com",
     "openai.com", "anthropic.com", "salesforce.com", "adobe.com", "nvidia.com",
-    "mckinsey.com", "bain.com", "bcg.com", "slalom.com", "thoughtworks.com",
+    "mckinsey.com", "bain.com", "bcg.com", "slalom.com",
     "manychat.com", "converse.ai", "inbenta.com",
     # Non-PK food collisions
     "shawarmajunction.com",  # US
@@ -615,7 +615,16 @@ def _is_self_rival(
         return True
     ch = _domain_of(client_website or "")
     rh = _domain_of(website or "")
-    if ch and rh and ch == rh:
+    if ch and rh:
+        if ch == rh:
+            return True
+        ch_parts = ch.split(".")
+        rh_parts = rh.split(".")
+        ch_base = ".".join(ch_parts[-3:]) if len(ch_parts) >= 3 and ch_parts[-2] in {"edu", "com", "org", "gov", "net", "ac", "co"} else (".".join(ch_parts[-2:]) if len(ch_parts) >= 2 else ch)
+        rh_base = ".".join(rh_parts[-3:]) if len(rh_parts) >= 3 and rh_parts[-2] in {"edu", "com", "org", "gov", "net", "ac", "co"} else (".".join(rh_parts[-2:]) if len(rh_parts) >= 2 else rh)
+        if ch_base and rh_base and ch_base == rh_base:
+            return True
+    if rh and c_tokens and any(tok in rh.split(".")[0] for tok in c_tokens if len(tok) >= 4):
         return True
     return False
 
@@ -900,17 +909,31 @@ def _mentions_target_market(blob: str, website: str | None, market: str) -> bool
     return False
 
 
-def _mentions_conflicting_country(blob: str, website: str | None, market: str) -> bool:
+def _mentions_conflicting_country(
+    blob: str,
+    website: str | None,
+    market: str,
+    client_name: str = "",
+) -> bool:
     """True when text/site clearly points at a different known country than the required market."""
     target = _normalize_country_key(market)
     if not target:
         return False
+    text = _as_str(blob).lower()
+    if client_name:
+        # Strip client name and its tokens so phrases like "competitor of Comsats Lahore" do not inject Pakistan into an India check
+        c_clean = _as_str(client_name).lower().strip()
+        if c_clean:
+            text = text.replace(c_clean, " ")
+            for tok in re.split(r"[^a-z0-9]+", c_clean):
+                if len(tok) >= 3:
+                    text = re.sub(rf"\b{re.escape(tok)}\b", " ", text)
     host = _domain_of(website or "")
     found: set[str] = set()
     for key, aliases in _COUNTRY_ALIASES.items():
         if key == target:
             continue
-        if _blob_mentions_any(blob, aliases):
+        if _blob_mentions_any(text, aliases):
             found.add(key)
         if _host_matches_tlds(host, _COUNTRY_TLDS.get(key, set())):
             found.add(key)
@@ -1101,11 +1124,26 @@ def _rival_fits_run_scope(
             return False
         if website and _is_serp_noise_domain(website):
             return False
+        # For non-US clients with a domestic market (e.g. Pakistan), exclude rivals that are strictly local domestic shops
+        if market_l:
+            home_key = _normalize_country_key(market_l)
+            if home_key and home_key != "united states":
+                hq_key = _normalize_country_key(headquarters or "")
+                tld_match = _host_matches_tlds(_domain_of(website or ""), _COUNTRY_TLDS.get(home_key, set()))
+                blob_clean = blob
+                if client_name:
+                    blob_clean = re.sub(re.escape(client_name.lower()), " ", blob_clean)
+                    for tok in re.split(r"[^a-z0-9]+", client_name.lower()):
+                        if len(tok) >= 3:
+                            blob_clean = re.sub(rf"\b{re.escape(tok)}\b", " ", blob_clean)
+                mentions_home = _mentions_target_market(blob_clean, website, home_key)
+                if (hq_key == home_key or tld_match or mentions_home):
+                    return False
         return True
 
     if not market_l:
         return False
-    if _mentions_conflicting_country(blob, website, market_l):
+    if _mentions_conflicting_country(blob, website, market_l, client_name=client_name):
         return False
     hq_key = _normalize_country_key(headquarters or "")
     market_key = _normalize_country_key(market_l)
@@ -1120,12 +1158,12 @@ def _serp_gl_for_market(market: str) -> str | None:
 
 
 # Peer-fit: reject consumer retail / media / wrong verticals when the client is a B2B software/agency peer
-_B2B_PEER_MODELS = {"agency", "saas", "services", "product", "software", "consulting", "b2b"}
+_B2B_PEER_MODELS = {"agency", "saas", "software", "consulting", "b2b"}
 _RETAIL_MARKETPLACE_MARKERS = (
     "ecommerce", "e-commerce", "e commerce", "online shopping", "online store", "online retail",
     "shopping platform", "shopping mall", "marketplace", "cash on delivery", "cash-on-delivery",
     "fashion", "electronics store", "consumer durables", "grocery", "retail store", "retailer",
-    "buy online", "add to cart", "shop now",
+    "buy online", "add to cart", "shop now", "apparel", "clothing", "footwear", "garments", "textiles",
 )
 _MEDIA_DIRECTORY_MARKERS = (
     "tech news", "news portal", "blog", "magazine", "media company", "job board",
@@ -1147,12 +1185,35 @@ _VERTICAL_MARKERS: dict[str, tuple[str, ...]] = {
         "wallet app", "send money", "cash in", "cash out", "iban", "branchless banking",
     ),
     "retail": _RETAIL_MARKETPLACE_MARKERS,
+    "automotive": (
+        "automotive", "automobile", "cars", "car dealership", "dealerships", "vehicles", "suv",
+        "motorcycles", "electric vehicles", "used cars", "auto retail", "car trading",
+    ),
     "manufacturing": (
         "manufacturing", "pharmaceutical manufacturing", "process engineer", "digital twin",
         "plant optimization", "factory", "industrial automation",
     ),
     "telecom": ("telecom", "mobile network", "mobile operator", "isp ", "broadband provider", "5g network"),
-    "healthcare": ("hospital", "clinic", "telemedicine", "healthcare provider", "pharma company", "medical device"),
+    "healthcare": (
+        "hospital", "hospitals", "clinic", "clinics", "telemedicine", "telehealth", "healthcare",
+        "health care", "diagnostic", "pathology", "medical lab", "laboratory", "pharma",
+        "pharmacy", "pharmaceutical", "medical device",
+    ),
+    "higher_education": (
+        "university", "universities", "higher ed", "higher education", "degree awarding",
+        "undergraduate", "postgraduate", "bachelor", "master's degree", "phd program",
+        "institute of technology", "business school", "medical university", "engineering university",
+    ),
+    "k12_school": (
+        "school system", "grammar school", "high school", "primary school", "elementary school",
+        "middle school", "k-12", "k12", "preschool", "kindergarten", "school network", "o level school",
+    ),
+    "college_intermediate": (
+        "intermediate college", "junior college", "higher secondary", "fsc college", "ics college", "a level college",
+    ),
+    "test_prep_academy": (
+        "test prep", "entry test", "mdcat", "ecat", "sat prep", "coaching center", "tuition academy",
+    ),
     "edtech": ("edtech", "online learning", "e-learning", "school management", "university portal", "tutoring platform"),
     "logistics": ("logistics", "courier", "shipping company", "fleet management", "warehousing", "freight"),
     "real_estate": ("real estate", "property portal", "housing marketplace", "listings platform"),
@@ -1161,12 +1222,15 @@ _VERTICAL_MARKERS: dict[str, tuple[str, ...]] = {
     "data_ai": (
         "competitive intelligence", "market intelligence", "business intelligence", "data analytics",
         "ai agency", "machine learning platform", "data platform", "bi platform", "competitor tracking",
-        "market research software", "insights platform",
+        "market research software", "insights platform", "artificial intelligence", "machine learning",
+        "data science", "enterprise ai", "ai solutions", "ai consulting", "analytics consulting",
+        "data consulting", "ai-driven",
     ),
     "software_services": (
         "software house", "software development company", "custom software", "it services",
         "digital agency", "web development agency", "product engineering", "dev shop",
-        "digital engineering", "outsourcing software", "application development",
+        "digital engineering", "outsourcing software", "application development", "software company",
+        "it consulting", "technology consulting", "software engineering", "saas",
     ),
     "food_qsr": (
         "fast food", "fast-food", "qsr", "pizza", "burger", "fried chicken", "shawarma",
@@ -1174,6 +1238,16 @@ _VERTICAL_MARKERS: dict[str, tuple[str, ...]] = {
         "food chain", "food brand", "quick service", "quick-service", "cloud kitchen",
         "ghost kitchen", "delivery pizza", "pizzas", "burgers", "broast", "biryani",
         "fast casual", "eatery", "eateries",
+    ),
+    "beauty_personal_care": (
+        "beauty salon", "beauty parlour", "beauty parlor", "hair salon", "makeup studio",
+        "bridal makeup", "skincare", "skin care", "aesthetic clinic", "cosmetics",
+        "dermatology clinic", "hair dressing", "hair stylist", "spa and wellness",
+        "beauty lounge", "nail bar", "nail salon", "lash bar", "beauty clinic", "medspa",
+    ),
+    "fashion_lifestyle": (
+        "apparel", "clothing brand", "fashion brand", "boutique", "couture", "pret",
+        "fabric", "textile", "designer wear", "footwear", "accessories brand",
     ),
     "talent_marketplace": (
         "talent marketplace", "talent network", "hire developers", "staff augmentation marketplace",
@@ -1201,6 +1275,11 @@ _MODEL_FAMILIES: dict[str, str] = {
     "fast-food": "food",
     "qsr": "food",
     "food": "food",
+    "beauty": "consumer_services",
+    "salon": "consumer_services",
+    "cosmetics": "retail",
+    "fashion": "retail",
+    "apparel": "retail",
     "other": "other",
 }
 
@@ -1258,12 +1337,46 @@ _KNOWN_QSR_BRANDS = (
     "rizwan pocket shawarma",
     "pocket shawarma",
     "meet me in paris",
+    "layers",
+    "layers bakeshop",
+    "kitchen cuisine",
+    "del frio",
+    "sweet tooth",
+    "pie in the sky",
+    "14th street pizza",
+    "14th street",
+    "broadway pizza",
+    "california pizza",
+    "pizza max",
+    "pizzaexpress",
+    "pizza express",
+    "franco manca",
+    "mod pizza",
+    "blaze pizza",
+    "boston pizza",
+    "shake shack",
+    "five guys",
+    "in-n-out",
+    "in n out",
+    "raising canes",
+    "crumbl cookies",
+    "magnolia bakery",
+    "nothing bundt cakes",
+    "insomnia cookies",
+    "milk bar",
+    "gails bakery",
+    "gail's bakery",
+    "lolas cupcakes",
+    "lola's cupcakes",
+    "hummingbird bakery",
+    "fork and knives",
+    "fork n knives",
+    "fork \x27n\x27 knives",
+    "tehzeeb",
     "pizza hut",
     "domino",
+    "dominos",
     "papa john",
-    "california pizza",
-    "broadway pizza",
-    "pizza max",
     "burger lab",
     "hardee",
     "mcdonald",
@@ -1315,6 +1428,15 @@ _NATIONAL_CHAIN_TOKENS = (
     "california pizza",
     "pizza max",
     "burger lab",
+    "layers",
+    "layers bakeshop",
+    "kitchen cuisine",
+    "tehzeeb",
+    "gourmet",
+    "del frio",
+    "sweet tooth",
+    "rahat",
+    "pie in the sky",
     "food chain",
     "restaurant chain",
     "multi-city",
@@ -1376,22 +1498,119 @@ _SHORT_REAL_BRANDS = {
     "bcg",
     "pwc",
     "aws",
+    "sabs",
+    "zara",
+    "mac",
+    "nars",
+    "huda",
+    "elf",
+    "nyx",
+    "kiko",
+    "dior",
+    "fenty",
+    "lush",
+    "sephora",
+    "aldo",
+    "bunto",
+    "mirus",
+    "nike",
+    "puma",
+    "uber",
+    "careem",
+    "sony",
+    "dell",
+    "asus",
+    "acer",
+    "ebay",
+    "etsy",
+    "gap",
+    "hm",
 }
+
+_BEAUTY_PEER_TOKENS = (
+    "beauty",
+    "salon",
+    "parlour",
+    "parlor",
+    "spa",
+    "cosmetic",
+    "cosmetics",
+    "skincare",
+    "skin care",
+    "makeup",
+    "make-up",
+    "hair",
+    "aesthetic",
+    "aesthetics",
+    "dermatology",
+    "hair studio",
+    "beauty studio",
+    "bridal",
+    "grooming",
+    "nail",
+    "lash",
+    "brows",
+    "facial",
+    "hifsa khan",
+    "nabila",
+    "depilex",
+    "kashee",
+    "sabs",
+)
+
+_KNOWN_BEAUTY_BRANDS = (
+    "hifsa khan",
+    "depilex",
+    "kashees",
+    "kashee",
+    "sabs",
+    "nabila",
+    "tariq amin",
+    "allenora",
+    "natasha salon",
+    "pengs salon",
+    "mona j",
+    "faizas",
+    "toni & guy",
+    "toni and guy",
+    "mussarat misbah",
+    "masarrat makeup",
+)
 
 
 def _context_blob(*parts: object) -> str:
     return " ".join(_as_str(p) for p in parts if p).lower()
 
 
+def _looks_like_beauty_client(*parts: object) -> bool:
+    blob = _context_blob(*parts)
+    if not blob:
+        return False
+    if any(b in blob for b in _KNOWN_BEAUTY_BRANDS):
+        return True
+    if any(brand in blob for brand in _KNOWN_QSR_BRANDS):
+        return False
+    if "beauty_personal_care" in _detect_verticals(blob):
+        return True
+    return any(tok in blob for tok in _BEAUTY_PEER_TOKENS)
+
+
 def _looks_like_food_client(*parts: object) -> bool:
     blob = _context_blob(*parts)
     if not blob:
         return False
-    if any(brand in blob for brand in _KNOWN_QSR_BRANDS):
-        return True
+    if any(b in blob for b in _KNOWN_BEAUTY_BRANDS):
+        return False
+    if any(tok in blob for tok in ("hotel", "resort", "hospitality", "motel", "5-star hotel")) and not any(tok in blob for tok in ("restaurant", "bakery", "cafe", "qsr", "pizza", "burger", "shawarma", "biryani", "broast")):
+        return False
+    for brand in _KNOWN_QSR_BRANDS:
+        if re.search(rf"\b{re.escape(brand)}\b", blob):
+            return True
+    if "beauty_personal_care" in _detect_verticals(blob):
+        return False
     if "food_qsr" in _detect_verticals(blob):
         return True
-    return any(tok in blob for tok in _FOOD_PEER_TOKENS)
+    return any(re.search(rf"\b{re.escape(tok)}\b", blob) for tok in _FOOD_PEER_TOKENS)
 
 
 def _is_global_food_franchise(name: str, website: str | None = None) -> bool:
@@ -1617,6 +1836,30 @@ def _food_format_compatible(client_fmt: FoodFormat, rival_fmt: FoodFormat) -> bo
     return client_fmt == rival_fmt
 
 
+def _client_peer_hint(*parts: object) -> str:
+    """Human label for empty-rival errors matching the client's actual industry."""
+    if _looks_like_food_client(*parts):
+        return _food_rival_peer_hint(*parts)
+    if _looks_like_beauty_client(*parts):
+        return "beauty-salon / makeup-studio rivals"
+    if _looks_like_software_peer_client(*parts):
+        return "software-house / digital-agency rivals"
+    blob = _context_blob(*parts)
+    for w in ("fashion", "clothing", "apparel", "boutique"):
+        if w in blob:
+            return "fashion / apparel rivals"
+    for w in ("healthcare", "clinic", "hospital", "medical"):
+        if w in blob:
+            return "healthcare / clinic rivals"
+    for w in ("real estate", "property"):
+        if w in blob:
+            return "real estate rivals"
+    for w in ("education", "school", "academy", "learning"):
+        if w in blob:
+            return "education rivals"
+    return "same-industry peer rivals"
+
+
 def _food_rival_peer_hint(*parts: object) -> str:
     """Human label for empty-rival errors — match the client's actual food format."""
     fmt = _food_format_from_blob(*parts)
@@ -1772,9 +2015,18 @@ def _peer_scale_prompt_rule(client_scale: PeerScale, *, is_food: bool = False) -
 
 def _looks_like_software_peer_client(*parts: object) -> bool:
     blob = _context_blob(*parts)
-    if not blob or _looks_like_food_client(blob):
+    if not blob or _looks_like_food_client(blob) or _looks_like_beauty_client(blob):
         return False
-    if "software_services" in _detect_verticals(blob) or "data_ai" in _detect_verticals(blob):
+    if any(tok in blob for tok in (
+        "bank", "banking", "wallet", "fintech", "payment", "ecommerce", "e-commerce",
+        "retail", "hospital", "clinic", "diagnostic", "automotive", "car dealership",
+        "real estate", "property portal", "school", "college", "university", "academy",
+    )):
+        return False
+    verts = _detect_verticals(blob)
+    if "fintech" in verts or "retail" in verts or "healthcare" in verts or "automotive" in verts or "real_estate" in verts:
+        return False
+    if "software_services" in verts or "data_ai" in verts:
         return True
     return any(tok in blob for tok in _SOFTWARE_PEER_TOKENS)
 
@@ -1798,7 +2050,6 @@ def _detect_verticals(text: str) -> set[str]:
     found: set[str] = set()
     for vertical, markers in _VERTICAL_MARKERS.items():
         hits = sum(1 for m in markers if m in blob)
-        # fintech/retail need only one strong marker; others need a hit too
         if hits >= 1:
             found.add(vertical)
     # Name heuristics: NayaPay, EasyPaisa-style wallets are fintech even without long blurbs
@@ -1836,6 +2087,12 @@ _GENERIC_RIVAL_NAMES = {
     "software solutions", "it solutions", "tech solutions", "digital solutions",
     "software house", "it company", "tech company", "software company",
     "abc tech", "xyz tech", "test company",
+    "pizza inn", "pizza inn pakistan", "eastern oven", "pizza m21", "caesars pizza", "caprinos",
+    "pizza 24", "pizza 360", "pizza 5", "burger 360",
+    "about us", "about", "contact us", "contact", "home", "homepage", "our story",
+    "who we are", "privacy policy", "terms", "terms of service", "terms & conditions",
+    "locations", "our locations", "branches", "outlets", "menu", "our menu", "careers",
+    "reviews", "customer reviews", "login", "sign in", "faq", "faqs", "order online", "online ordering",
 }
 _GENERIC_NAME_RE = re.compile(
     r"^(tech|soft|pak|info|digital|global|smart|future|nextgen|next\s*gen|axon)"
@@ -1942,7 +2199,11 @@ def _is_generic_or_fake_rival_name(name: str) -> bool:
     if compact in {"fourtwentyfour", "420pizza", "hotandspicy"}:
         return True
     # Too short / too generic single-token brands
-    if len(compact) < 5:
+    if len(compact) < 3:
+        return True
+    if len(compact) in (3, 4) and compact in {
+        "tech", "soft", "corp", "demo", "test", "null", "none", "fake", "temp", "abcd", "xyz", "qwe", "asdf"
+    }:
         return True
     # "X Solutions" with a very generic X
     if re.match(r"^(tech|soft|pak|it|info|digital|global|smart|web)\s+solutions$", key):
@@ -1964,7 +2225,37 @@ def _is_generic_or_fake_rival_name(name: str) -> bool:
     # Listicle / directory titles used as "company" names
     if re.search(r"\b(companies|developers|agencies)\s+in\s+\w+", key):
         return True
-    if re.search(r"\b(top|best|leading)\s+\d*\s*(software|it|digital|web)\b", key):
+    if re.search(r"\b(university\s+rankings?|world\s+university\s+rankings?|best\s+universities|top\s+universities|school\s+rankings?)\b", key):
+        return True
+    if re.search(r"\b(private|public|recognised|recognized|affiliated|top|best|leading|all)\s+universities\b", key):
+        return True
+    if re.search(r"\b(private|public|recognised|recognized|affiliated|top|best|leading|all)\s+schools\b", key):
+        return True
+    if re.search(r"\b(private|public|recognised|recognized|affiliated|top|best|leading|all)\s+colleges\b", key):
+        return True
+    if re.search(r"\buniversities\s+(in|of|ranking|rankings|recognised|recognized)\b", key):
+        return True
+    if re.search(r"\b(higher\s+education\s+commission|hec|higher\s+education\s+department)\b", key):
+        return True
+    if re.search(r"\b(imarc\s*group|mordor\s*intelligence|grand\s*view\s*research|allied\s*market\s*research|fortune\s*business|market\s*research|business\s*insights)\b", key):
+        return True
+    # Generic topic, capability or service category phrases (e.g. "Data Analytics", "Digital Engineering Services", "Business Intelligence")
+    if re.fullmatch(
+        r"^(data\s+analytics|digital\s+engineering|business\s+intelligence|artificial\s+intelligence|machine\s+learning|software\s+development|web\s+development|cloud\s+services|it\s+services|data\s+science|data\s+analysis)(\s+(services|solutions|tools|consulting|dashboards?|reporting|practice|group|team))?$",
+        key,
+    ):
+        return True
+    if re.search(
+        r"\b(digital\s+engineering\s+and\s+operational\s+technology\s+services|business\s+intelligence\s+reporting\s+tools|bi\s+tools\s+download|marketing\s+analytics\s+dashboard\s+setup|certified\s+data\s+analyst|data\s+analytics\s+mastery|big\s+data\s+analytics)\b",
+        key,
+    ):
+        return True
+    # "Power BI Consulting in New York", "Data Analysis in Karachi", "Freelancers in New York"
+    if re.search(r"\b(consulting|services|developers|freelancers|training|course|jobs|hiring)\s+in\s+", key):
+        return True
+    if re.search(r"\b(freelancers?|upwork|fiverr|toptal|freelancer|guru\.com|ibisworld|statista|capterra|g2\s+crowd|trustpilot)\b", key):
+        return True
+    if re.match(r"^(about|contact|login|signup|home|privacy|terms|overview|history\s+of|admissions\s+at)\s+", key):
         return True
     return False
 
@@ -1974,9 +2265,13 @@ def _looks_like_invented_food_domain(name: str, website: str | None) -> bool:
     host = _domain_of(website or "")
     if not host:
         return False
-    host_core = re.sub(r"[^a-z0-9]+", "", host.split(".")[0].lower())
     compact = re.sub(r"[^a-z0-9]+", "", _as_str(name).lower())
-    if not compact or not host_core:
+    if not compact:
+        return False
+    if any(brand == compact for brand in _KNOWN_QSR_BRANDS) or compact in _SHORT_REAL_BRANDS:
+        return False
+    host_core = re.sub(r"[^a-z0-9]+", "", host.split(".")[0].lower())
+    if not host_core:
         return False
     if _FAKE_FOOD_NUMBER_NAME_RE.match(re.sub(r"\s+", " ", _as_str(name).lower()).strip()):
         return True
@@ -2112,9 +2407,19 @@ _LOCAL_QSR_SEEDS: dict[str, list[dict]] = {
         # cafe (coffee-led — not restaurant peers)
         {"name": "Espresso Lab", "website": "https://www.espressolab.com.pk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_CAFE},
         {"name": "Gloria Jean's Coffees", "website": "https://www.gloriajeans.com.pk", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_CAFE},
-        # bakery / cake shop (not restaurant peers)
-        {"name": "Layers Bakeshop", "website": "https://www.layers.com.pk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BAKERY},
+        # bakery / cake shop / desserts (Layers Bakeshop peers)
+        {"name": "Kitchen Cuisine", "website": "https://kitchencuisine.com.pk", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Tehzeeb Bakers", "website": "https://tehzeeb.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Del Frio", "website": "https://delfrio.com.pk", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Sweet Tooth", "website": "https://sweettooth.com.pk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Rahat Bakers", "website": "https://rahatbakers.com.pk", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Gourmet Bakers", "website": "https://gourmetpakistan.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Pie in the Sky", "website": "https://pieinthesky.com.pk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Jalal Sons", "website": "https://jalalsons.com.pk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Cocoa Dolce", "website": "https://cocoadolce.pk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Cinnabon Pakistan", "website": "https://cinnabon.pk", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
         {"name": "Butlers Chocolate Café", "website": "https://www.butlerschocolates.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Layers Bakeshop", "website": "https://www.layers.com.pk", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
         # burger / indie QSR
         {"name": "Johnny & Jugnu", "website": "https://www.johnnyandjugnu.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BURGER},
         {"name": "Mad", "website": "https://www.mad.com.pk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BURGER},
@@ -2128,28 +2433,1131 @@ _LOCAL_QSR_SEEDS: dict[str, list[dict]] = {
         # asian
         {"name": "Ginsoy", "website": "https://www.ginsoy.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_ASIAN},
         {"name": "Ginyaki", "website": "https://ginyaki.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_ASIAN},
-        # national chains
-        {"name": "Cheezious", "website": "https://www.cheezious.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_PIZZA},
+        # national pizza chains & authentic peers (Cheezious / Broadway / 14th Street peers)
+        {"name": "14th Street Pizza", "website": "https://14thstreetpizza.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_PIZZA},
         {"name": "Broadway Pizza", "website": "https://broadwaypizza.com.pk", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_PIZZA},
         {"name": "California Pizza", "website": "https://www.californiapizza.com.pk", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_PIZZA},
         {"name": "Pizza Max", "website": "https://pizzamax.com.pk", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_PIZZA},
-        {"name": "Caesars Pizza", "website": "https://caesars.com.pk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_PIZZA},
-        {"name": "Eastern Oven", "website": "https://easternoven.pk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_PIZZA},
-        {"name": "Pizza M21", "website": "https://www.pizzam21.pk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_PIZZA},
-        {"name": "Caprinos", "website": "https://caprinos.com.pk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_PIZZA},
+        {"name": "Fork 'n' Knives Pizza Fusion", "website": "https://forknknives.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_PIZZA},
+        {"name": "Tehzeeb Pizza", "website": "https://tehzeeb.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_PIZZA},
+        {"name": "Pizza Junction", "website": "https://pizzajunction.pk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_PIZZA},
         {"name": "NY212 Pizza", "website": "https://orders.ny-212.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_PIZZA},
         {"name": "Howdy", "website": "https://www.howdy.pk", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BURGER},
         {"name": "OPTP", "website": "https://www.optp.biz", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BURGER},
         {"name": "Ranchers", "website": "https://www.rancherscafe.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BURGER},
         # global franchises
-        {"name": "Pizza Hut", "website": "https://www.pizzahut.com.pk", "tier": _FOOD_TIER_GLOBAL, "format": _FOOD_FORMAT_PIZZA},
         {"name": "Domino's Pizza", "website": "https://www.dominos.com.pk", "tier": _FOOD_TIER_GLOBAL, "format": _FOOD_FORMAT_PIZZA},
+        {"name": "Pizza Hut", "website": "https://www.pizzahut.com.pk", "tier": _FOOD_TIER_GLOBAL, "format": _FOOD_FORMAT_PIZZA},
         {"name": "Papa John's", "website": "https://www.papajohns.com.pk", "tier": _FOOD_TIER_GLOBAL, "format": _FOOD_FORMAT_PIZZA},
         {"name": "KFC", "website": "https://www.kfcpakistan.com", "tier": _FOOD_TIER_GLOBAL, "format": _FOOD_FORMAT_GENERAL},
         {"name": "McDonald's", "website": "https://www.mcdonalds.com.pk", "tier": _FOOD_TIER_GLOBAL, "format": _FOOD_FORMAT_BURGER},
         {"name": "Hardee's", "website": "https://www.hardees.com.pk", "tier": _FOOD_TIER_GLOBAL, "format": _FOOD_FORMAT_BURGER},
     ],
+    "india": [
+        # restaurants & dining
+        {"name": "Haldiram's", "website": "https://www.haldirams.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_RESTAURANT},
+        {"name": "Bikanervala", "website": "https://bikanervala.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_RESTAURANT},
+        {"name": "Barbeque Nation", "website": "https://www.barbequenation.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_RESTAURANT},
+        {"name": "Paradise Biryani", "website": "https://www.paradisefoodcourt.in", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_RESTAURANT},
+        {"name": "Smoke House Deli", "website": "https://smokehousedeli.in", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_RESTAURANT},
+        {"name": "Karim's", "website": "https://karimhoteldelhi.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_RESTAURANT},
+        {"name": "Punjab Grill", "website": "https://punjabgrill.in", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_RESTAURANT},
+        {"name": "Mainland China", "website": "https://mainlandchina.in", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_ASIAN},
+        # bakeries & dessert shops
+        {"name": "Theobroma", "website": "https://theobroma.in", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Bakingo", "website": "https://www.bakingo.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Monginis", "website": "https://www.monginis.net", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Winni Cakes", "website": "https://www.winni.in", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Karachi Bakery Hyderabad", "website": "https://www.karachibakery.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Le15 Patisserie", "website": "https://le15.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Flurys", "website": "https://flurys.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Wenger's Deli", "website": "https://wengers.in", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BAKERY},
+        # cafes
+        {"name": "Chaayos", "website": "https://chaayos.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_CAFE},
+        {"name": "Chai Point", "website": "https://chaipoint.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_CAFE},
+        {"name": "Cafe Coffee Day", "website": "https://www.cafecoffeeday.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_CAFE},
+        {"name": "Blue Tokai Coffee Roasters", "website": "https://bluetokaicoffee.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_CAFE},
+        {"name": "Third Wave Coffee", "website": "https://www.thirdwavecoffee.in", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_CAFE},
+        # burger & pizza QSR
+        {"name": "Burger Singh", "website": "https://burgersinghonline.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BURGER},
+        {"name": "Wow! Momo", "website": "https://www.wowmomo.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BURGER},
+        {"name": "Faasos", "website": "https://www.eatsure.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_SHAWARMA},
+        {"name": "La Pino'z Pizza", "website": "https://lapinozpizza.in", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_PIZZA},
+        {"name": "Ovenstory Pizza", "website": "https://www.ovenstory.in", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_PIZZA},
+    ],
+    "united kingdom": [
+        {"name": "Gail's Bakery", "website": "https://gailsbread.co.uk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Lola's Cupcakes", "website": "https://www.lolascupcakes.co.uk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Hummingbird Bakery", "website": "https://hummingbirdbakery.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Ole & Steen UK", "website": "https://oleandsteen.co.uk", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Paul UK", "website": "https://www.paul-uk.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Peggy Porschen", "website": "https://www.peggyporschen.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Greggs", "website": "https://www.greggs.co.uk", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Nando's UK", "website": "https://www.nandos.co.uk", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_RESTAURANT},
+        {"name": "Wagamama", "website": "https://www.wagamama.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_ASIAN},
+        {"name": "Dishoom", "website": "https://www.dishoom.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_RESTAURANT},
+        {"name": "PizzaExpress", "website": "https://www.pizzaexpress.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_PIZZA},
+        {"name": "Franco Manca", "website": "https://www.francomanca.co.uk", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_PIZZA},
+        {"name": "Costa Coffee", "website": "https://www.costa.co.uk", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_CAFE},
+        {"name": "Caffè Nero", "website": "https://caffenero.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_CAFE},
+        {"name": "Pret A Manger", "website": "https://www.pret.co.uk", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_CAFE},
+        {"name": "Honest Burgers", "website": "https://www.honestburgers.co.uk", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BURGER},
+        {"name": "Gourmet Burger Kitchen", "website": "https://www.gbk.co.uk", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BURGER},
+        {"name": "Leon", "website": "https://leon.co", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_RESTAURANT},
+    ],
+    "united states": [
+        {"name": "Crumbl Cookies", "website": "https://crumblcookies.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Magnolia Bakery", "website": "https://magnoliabakery.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Nothing Bundt Cakes", "website": "https://www.nothingbundtcakes.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Insomnia Cookies", "website": "https://insomniacookies.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Milk Bar", "website": "https://milkbarstore.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Levain Bakery", "website": "https://levainbakery.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Sprinkles Cupcakes", "website": "https://sprinkles.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Paris Baguette US", "website": "https://parisbaguette.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Tous Les Jours US", "website": "https://www.tljus.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Carlo's Bakery", "website": "https://bakeshop.carlosbakery.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Panera Bread", "website": "https://www.panerabread.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Chipotle Mexican Grill", "website": "https://www.chipotle.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_RESTAURANT},
+        {"name": "Sweetgreen", "website": "https://www.sweetgreen.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_RESTAURANT},
+        {"name": "Shake Shack", "website": "https://shakeshack.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BURGER},
+        {"name": "Five Guys", "website": "https://www.fiveguys.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BURGER},
+        {"name": "In-N-Out Burger", "website": "https://www.in-n-out.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BURGER},
+        {"name": "Raising Cane's", "website": "https://www.raisingcanes.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BURGER},
+        {"name": "Starbucks", "website": "https://www.starbucks.com", "tier": _FOOD_TIER_GLOBAL, "format": _FOOD_FORMAT_CAFE},
+        {"name": "Dunkin'", "website": "https://www.dunkindonuts.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_CAFE},
+        {"name": "Peet's Coffee", "website": "https://www.peets.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_CAFE},
+        {"name": "MOD Pizza", "website": "https://modpizza.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_PIZZA},
+        {"name": "Blaze Pizza", "website": "https://blazepizza.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_PIZZA},
+    ],
+    "uae": [
+        {"name": "Paul Arabia", "website": "https://paularabia.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Bloomsbury's Boutique Bakery", "website": "https://bloomsburys.ae", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Sugaholic Bakeshop", "website": "https://sugaholic.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "House of Cakes Dubai", "website": "https://houseofcakesdubai.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Home Bakery UAE", "website": "https://homebakery.ae", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "L'ETO Caffe", "website": "https://letocaffe.ae", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Al Baik UAE", "website": "https://albaik.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BURGER},
+        {"name": "Zaatar W Zeit UAE", "website": "https://zaatarwzeit.net", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_SHAWARMA},
+        {"name": "Operation Falafel", "website": "https://operationfalafel.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_SHAWARMA},
+        {"name": "SALT UAE", "website": "https://find-salt.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BURGER},
+        {"name": "Pickl", "website": "https://eatpickl.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BURGER},
+        {"name": "Gazebo", "website": "https://gazebo.ae", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_RESTAURANT},
+        {"name": "Shakespeare and Co", "website": "https://shakespeare-and-co.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_CAFE},
+        {"name": "% Arabica UAE", "website": "https://arabica.coffee", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_CAFE},
+    ],
+    "saudi arabia": [
+        {"name": "Al Baik KSA", "website": "https://albaik.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BURGER},
+        {"name": "Kudu", "website": "https://kudu.com.sa", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BURGER},
+        {"name": "Herfy", "website": "https://herfy.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BURGER},
+        {"name": "Shawarmer", "website": "https://shawarmer.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_SHAWARMA},
+        {"name": "Mama Noura", "website": "https://mamanoura.com.sa", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_SHAWARMA},
+        {"name": "Al Romansiah", "website": "https://alromansiah.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_RESTAURANT},
+        {"name": "Maestro Pizza", "website": "https://maestropizza.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_PIZZA},
+        {"name": "Saadeddin Pastry", "website": "https://saadeddin.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Munch Bakery", "website": "https://munchbakery.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Barn's Coffee", "website": "https://barns.com.sa", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_CAFE},
+        {"name": "Half Million", "website": "https://halfm.net", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_CAFE},
+    ],
+    "canada": [
+        {"name": "Tim Hortons", "website": "https://www.timhortons.ca", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_CAFE},
+        {"name": "Boston Pizza", "website": "https://bostonpizza.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_PIZZA},
+        {"name": "Harvey's", "website": "https://www.harveys.ca", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BURGER},
+        {"name": "A&W Canada", "website": "https://web.aw.ca", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BURGER},
+        {"name": "BeaverTails", "website": "https://beavertails.com", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Cora Breakfast and Lunch", "website": "https://www.chezcora.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_RESTAURANT},
+        {"name": "Second Cup Coffee", "website": "https://secondcup.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_CAFE},
+        {"name": "Mary Brown's Chicken", "website": "https://marybrowns.com", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BURGER},
+    ],
+    "australia": [
+        {"name": "Guzman y Gomez", "website": "https://www.guzmanygomez.com.au", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_RESTAURANT},
+        {"name": "Grill'd", "website": "https://www.grilld.com.au", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BURGER},
+        {"name": "Hungry Jack's", "website": "https://www.hungryjacks.com.au", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BURGER},
+        {"name": "Bakers Delight", "website": "https://www.bakersdelight.com.au", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_BAKERY},
+        {"name": "Boost Juice", "website": "https://www.boostjuice.com.au", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_CAFE},
+        {"name": "The Coffee Club", "website": "https://coffeeclub.com.au", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_CAFE},
+        {"name": "Crust Pizza", "website": "https://www.crust.com.au", "tier": _FOOD_TIER_NATIONAL, "format": _FOOD_FORMAT_PIZZA},
+        {"name": "Lord of the Fries", "website": "https://lordofthefries.com.au", "tier": _FOOD_TIER_LOCAL, "format": _FOOD_FORMAT_BURGER},
+    ],
 }
+
+_LOCAL_BEAUTY_SEEDS: dict[str, list[dict]] = {
+    "pakistan": [
+        {"name": "Depilex Beauty Clinic", "website": "https://depilex.com", "niche": "beauty salon & aesthetic clinic"},
+        {"name": "Kashee's Beauty Parlour", "website": "https://kashees.com", "niche": "bridal makeup & salon"},
+        {"name": "Sabs The Salon", "website": "https://sabs.com.pk", "niche": "beauty salon & hair styling"},
+        {"name": "Nabila Salon", "website": "https://nabila.net", "niche": "hair styling & beauty salon"},
+        {"name": "Tariq Amin Salon", "website": "https://tariqamin.com", "niche": "styling studio & salon"},
+        {"name": "Natasha Salon", "website": "https://natashasalon.com", "niche": "makeup studio & salon"},
+        {"name": "Allenora Annie's Signature Salon", "website": "https://allenora.com", "niche": "bridal salon"},
+        {"name": "Peng's Salon", "website": "https://pengssalon.com", "niche": "hair & beauty salon"},
+        {"name": "Mona J Salon", "website": "https://monaj.com.pk", "niche": "beauty salon & spa"},
+        {"name": "Faiza's Salon", "website": "https://faizas.com.pk", "niche": "beauty salon & makeup"},
+    ],
+    "india": [
+        {"name": "Lakme Salon", "website": "https://www.lakmesalon.in", "niche": "beauty salon, hair styling & bridal makeup"},
+        {"name": "Naturals Salon", "website": "https://naturalssalon.com", "niche": "hair & beauty salon chain"},
+        {"name": "Jawed Habib Hair & Beauty", "website": "https://jawedhabib.co.in", "niche": "hair styling & beauty academy"},
+        {"name": "Kaya Skin Clinic", "website": "https://www.kaya.in", "niche": "dermatology, aesthetic skincare & clinic"},
+        {"name": "Enrich Salon", "website": "https://www.enrichbeauty.com", "niche": "beauty lounge & hair salon"},
+        {"name": "VLCC Wellness", "website": "https://www.vlccwellness.com", "niche": "wellness, skincare & beauty clinic"},
+        {"name": "Geetanjali Salon", "website": "https://geetanjalisalon.com", "niche": "luxury hair styling & beauty salon"},
+        {"name": "BBLUNT Salon", "website": "https://bblunt.com", "niche": "contemporary hair styling & salon"},
+    ],
+    "uae": [
+        {"name": "Tips & Toes", "website": "https://www.tipsandtoes.com", "niche": "beauty salon & spa"},
+        {"name": "NStyle Beauty Lounge", "website": "https://nstyleintl.com", "niche": "beauty salon & lounge"},
+        {"name": "Sisters Beauty Lounge", "website": "https://sistersbeautylounge.com", "niche": "beauty salon & lounge"},
+        {"name": "Pastels Salon", "website": "https://pastels-salon.com", "niche": "hair & beauty salon"},
+        {"name": "The White Room Spa", "website": "https://whiteroomdubai.com", "niche": "nail lounge & beauty spa"},
+        {"name": "JetSet Salon", "website": "https://jetsetuae.com", "niche": "hair salon & blow dry bar"},
+    ],
+    "saudi arabia": [
+        {"name": "Lumiere Salon", "website": "https://lumieresalon.sa", "niche": "beauty salon & spa"},
+        {"name": "Maison de Joelle", "website": "https://maisondejoelle.com", "niche": "beauty salon & makeup"},
+        {"name": "Base & Boon", "website": "https://baseandboon.com", "niche": "nail bar & beauty salon"},
+        {"name": "4Spa Riyadh", "website": "https://4spa.com.sa", "niche": "luxury spa & beauty lounge"},
+    ],
+    "united kingdom": [
+        {"name": "Toni & Guy", "website": "https://toniandguy.com", "niche": "hairdressing & beauty"},
+        {"name": "Rush Hair & Beauty", "website": "https://rush.co.uk", "niche": "hair & beauty salon"},
+        {"name": "Sassoon Salon", "website": "https://sassoon-salon.com", "niche": "creative hair styling & salon"},
+        {"name": "Supercuts UK", "website": "https://www.supercuts.co.uk", "niche": "haircut & styling salon"},
+        {"name": "Headmasters", "website": "https://www.headmasters.com", "niche": "hair & color salon"},
+    ],
+    "united states": [
+        {"name": "Drybar", "website": "https://drybar.com", "niche": "blowout salon"},
+        {"name": "Ulta Beauty", "website": "https://ulta.com", "niche": "beauty salon & cosmetics"},
+        {"name": "Sephora Beauty Studio", "website": "https://www.sephora.com", "niche": "makeup & skincare studio"},
+        {"name": "Regis Salons", "website": "https://www.regissalons.com", "niche": "hair styling & salon"},
+        {"name": "Great Clips", "website": "https://www.greatclips.com", "niche": "hair salon franchise"},
+        {"name": "Sport Clips", "website": "https://sportclips.com", "niche": "haircut & styling salon"},
+    ],
+}
+_LOCAL_MULTI_INDUSTRY_SEEDS: dict[str, dict[str, list[dict]]] = {
+    "pakistan": {
+        "automotive": [
+            {"name": "Toyota Indus Motor", "website": "https://toyota-indus.com", "industry": "Automotive", "niche": "passenger cars & SUVs"},
+            {"name": "Suzuki Pakistan", "website": "https://suzukipakistan.com", "industry": "Automotive", "niche": "passenger cars & commercial vehicles"},
+            {"name": "Hyundai Nishat Motors", "website": "https://hyundai-nishat.com", "industry": "Automotive", "niche": "passenger cars & SUVs"},
+            {"name": "Kia Lucky Motors", "website": "https://kia-luckymotor.com.pk", "industry": "Automotive", "niche": "passenger cars & SUVs"},
+            {"name": "Changan Pakistan", "website": "https://changan.com.pk", "industry": "Automotive", "niche": "sedans & SUVs"},
+            {"name": "Haval Pakistan", "website": "https://sazgarauto.com", "industry": "Automotive", "niche": "hybrid SUVs & crossovers"},
+            {"name": "MG Motors Pakistan", "website": "https://mgmotors.com.pk", "industry": "Automotive", "niche": "electric & hybrid SUVs"},
+            {"name": "Yamaha Motor Pakistan", "website": "https://www.yamaha-motor.com.pk", "industry": "Automotive", "niche": "motorcycles & two-wheelers"},
+            {"name": "Atlas Honda", "website": "https://www.atlashonda.com.pk", "industry": "Automotive", "niche": "motorcycles & automotive"},
+            {"name": "Honda Atlas Cars", "website": "https://www.honda.com.pk", "industry": "Automotive", "niche": "passenger cars & sedans"},
+        ],
+        "real_estate": [
+            {"name": "Zameen.com", "website": "https://www.zameen.com", "industry": "Real Estate", "niche": "property portal & real estate marketplace"},
+            {"name": "Graana.com", "website": "https://www.graana.com", "industry": "Real Estate", "niche": "real estate portal & property marketing"},
+            {"name": "Agency21 International", "website": "https://www.agency21.com", "industry": "Real Estate", "niche": "real estate agency & advisory"},
+            {"name": "Imarat Group", "website": "https://imarat.com.pk", "industry": "Real Estate", "niche": "real estate development & hospitality"},
+            {"name": "Habib Rafiq", "website": "https://www.habibrafiq.com", "industry": "Real Estate", "niche": "real estate infrastructure & development"},
+        ],
+        "retail": [
+            {"name": "Daraz", "website": "https://www.daraz.pk", "industry": "Retail & E-Commerce", "niche": "online shopping & e-commerce marketplace"},
+            {"name": "PriceOye", "website": "https://priceoye.pk", "industry": "Retail & E-Commerce", "niche": "consumer electronics & smartphones retail"},
+            {"name": "Telemart", "website": "https://www.telemart.pk", "industry": "Retail & E-Commerce", "niche": "electronics & lifestyle e-commerce"},
+            {"name": "Khaadi", "website": "https://pk.khaadi.com", "industry": "Apparel & Fashion", "niche": "apparel & fashion retail"},
+            {"name": "Sapphire", "website": "https://pk.sapphireonline.pk", "industry": "Apparel & Fashion", "niche": "apparel & fashion retail"},
+            {"name": "J. Junaid Jamshed", "website": "https://www.junaidjamshed.com", "industry": "Apparel & Fashion", "niche": "apparel, fragrances & fashion retail"},
+            {"name": "Gul Ahmed", "website": "https://www.gulahmedshop.com", "industry": "Apparel & Fashion", "niche": "textile & fashion retail"},
+            {"name": "Nishat Linen", "website": "https://nishatlinen.com", "industry": "Apparel & Fashion", "niche": "fashion & home textiles"},
+        ],
+        "fintech": [
+            {"name": "Habib Bank Limited (HBL)", "website": "https://www.hbl.com", "industry": "Banking & Financial Services", "niche": "commercial banking & digital finance"},
+            {"name": "Meezan Bank", "website": "https://www.meezanbank.com", "industry": "Banking & Financial Services", "niche": "islamic banking & retail finance"},
+            {"name": "Bank Alfalah", "website": "https://www.bankalfalah.com", "industry": "Banking & Financial Services", "niche": "retail banking & digital payments"},
+            {"name": "Easypaisa", "website": "https://easypaisa.com.pk", "industry": "Fintech", "niche": "digital wallet & branchless banking"},
+            {"name": "JazzCash", "website": "https://www.jazzcash.com.pk", "industry": "Fintech", "niche": "mobile wallet & fintech services"},
+            {"name": "NayaPay", "website": "https://www.nayapay.com", "industry": "Fintech", "niche": "digital wallet & emoney"},
+            {"name": "SadaPay", "website": "https://sadapay.pk", "industry": "Fintech", "niche": "fintech debit card & global business accounts"},
+        ],
+        "telecom": [
+            {"name": "Jazz", "website": "https://jazz.com.pk", "industry": "Telecommunications", "niche": "mobile network & telecom services"},
+            {"name": "Telenor Pakistan", "website": "https://www.telenor.com.pk", "industry": "Telecommunications", "niche": "cellular telecom & data connectivity"},
+            {"name": "Zong 4G", "website": "https://www.zong.com.pk", "industry": "Telecommunications", "niche": "cellular network & mobile broadband"},
+            {"name": "Ufone 4G", "website": "https://www.ufone.com", "industry": "Telecommunications", "niche": "telecom network & cellular packages"},
+            {"name": "PTCL", "website": "https://ptcl.com.pk", "industry": "Telecommunications", "niche": "broadband internet & fixed telecom"},
+            {"name": "Nayatel", "website": "https://nayatel.com", "industry": "Telecommunications", "niche": "fiber optic internet & enterprise connectivity"},
+        ],
+        "healthcare": [
+            {"name": "Chughtai Lab", "website": "https://chughtailab.com", "industry": "Healthcare", "niche": "diagnostic pathology & healthcare network"},
+            {"name": "Shaukat Khanum", "website": "https://shaukatkhanum.org.pk", "industry": "Healthcare", "niche": "tertiary cancer hospital & research center"},
+            {"name": "Aga Khan University Hospital", "website": "https://hospitals.aku.edu", "industry": "Healthcare", "niche": "multispecialty tertiary hospital & healthcare"},
+            {"name": "Marham", "website": "https://www.marham.pk", "industry": "Healthcare", "niche": "digital health platform & doctor booking"},
+            {"name": "Getz Pharma", "website": "https://getzpharma.com", "industry": "Healthcare", "niche": "pharmaceutical manufacturing & healthcare"},
+        ],
+        "university": [
+            {"name": "LUMS", "website": "https://lums.edu.pk", "industry": "Higher Education", "niche": "leading research university & business school"},
+            {"name": "NUST", "website": "https://nust.edu.pk", "industry": "Higher Education", "niche": "science, engineering & technology university"},
+            {"name": "FAST NUCES", "website": "https://www.nu.edu.pk", "industry": "Higher Education", "niche": "computer science, IT & emerging sciences university"},
+            {"name": "IBA Karachi", "website": "https://www.iba.edu.pk", "industry": "Higher Education", "niche": "business administration, finance & economics institute"},
+            {"name": "GIKI", "website": "https://giki.edu.pk", "industry": "Higher Education", "niche": "engineering sciences & technology institute"},
+            {"name": "COMSATS University", "website": "https://www.comsats.edu.pk", "industry": "Higher Education", "niche": "public research & IT university"},
+            {"name": "Aga Khan University", "website": "https://www.aku.edu", "industry": "Higher Education", "niche": "health sciences & medical university"},
+            {"name": "Lahore School of Economics", "website": "https://www.lahoreschoolofeconomics.edu.pk", "industry": "Higher Education", "niche": "economics & business university"},
+            {"name": "University of the Punjab", "website": "https://pu.edu.pk", "industry": "Higher Education", "niche": "public comprehensive research university"},
+            {"name": "SZABIST", "website": "https://szabist.edu.pk", "industry": "Higher Education", "niche": "science & technology degree-awarding institute"},
+            {"name": "Habib University", "website": "https://habib.edu.pk", "industry": "Higher Education", "niche": "liberal arts & sciences undergraduate university"},
+            {"name": "UET Lahore", "website": "https://uet.edu.pk", "industry": "Higher Education", "niche": "engineering & technology university"},
+            {"name": "Information Technology University (ITU)", "website": "https://itu.edu.pk", "industry": "Higher Education", "niche": "computer science & engineering university"},
+            {"name": "Quaid-i-Azam University", "website": "https://qau.edu.pk", "industry": "Higher Education", "niche": "public research university & postgraduate studies"},
+        ],
+        "school": [
+            {"name": "Beaconhouse School System", "website": "https://www.beaconhouse.net", "industry": "Primary & Secondary Education", "niche": "k-12 schooling & cambridge education network"},
+            {"name": "The City School", "website": "https://thecityschool.edu.pk", "industry": "Primary & Secondary Education", "niche": "k-12 schooling, o/a levels & primary education"},
+            {"name": "Lahore Grammar School", "website": "https://lgs.edu.pk", "industry": "Primary & Secondary Education", "niche": "private schooling, o/a levels & preschool network"},
+            {"name": "Roots Millennium Schools", "website": "https://millenniumschools.edu.pk", "industry": "Primary & Secondary Education", "niche": "k-12 schooling & international qualification"},
+            {"name": "Karachi Grammar School", "website": "https://www.kgs.edu.pk", "industry": "Primary & Secondary Education", "niche": "grammar school & cambridge education"},
+            {"name": "Army Public Schools (APSACS)", "website": "https://apsacssectt.edu.pk", "industry": "Primary & Secondary Education", "niche": "k-12 education system & nationwide schools"},
+            {"name": "Froebel's International School", "website": "https://www.froebels.edu.pk", "industry": "Primary & Secondary Education", "niche": "international school & cambridge curriculum"},
+            {"name": "Learning Alliance", "website": "https://learningalliance.edu.pk", "industry": "Primary & Secondary Education", "niche": "ib & cambridge school system"},
+            {"name": "The Educators", "website": "https://www.educators.edu.pk", "industry": "Primary & Secondary Education", "niche": "nationwide private school network"},
+            {"name": "Roots International Schools", "website": "https://rootsinternational.edu.pk", "industry": "Primary & Secondary Education", "niche": "international schooling & primary education"},
+            {"name": "SICAS", "website": "https://sicas.edu.pk", "industry": "Primary & Secondary Education", "niche": "private schooling & o/a level system"},
+            {"name": "Bloomfield Hall Schools", "website": "https://www.bloomfieldhall.com", "industry": "Primary & Secondary Education", "niche": "british-style education & k-12 schools"},
+        ],
+        "college": [
+            {"name": "Punjab Group of Colleges", "website": "https://pgc.edu", "industry": "College Education", "niche": "intermediate colleges, fsc, ics & higher secondary"},
+            {"name": "Superior Group of Colleges", "website": "https://superior.edu.pk", "industry": "College Education", "niche": "intermediate colleges & higher secondary education"},
+            {"name": "KIPS Colleges", "website": "https://kips.edu.pk/colleges", "industry": "College Education", "niche": "intermediate colleges, fsc & entry test focus"},
+            {"name": "Concordia Colleges", "website": "https://concordia.edu.pk", "industry": "College Education", "niche": "beaconhouse group intermediate colleges"},
+            {"name": "GCU Lahore", "website": "https://www.gcu.edu.pk", "industry": "College Education", "niche": "higher secondary college & university education"},
+        ],
+        "academy": [
+            {"name": "KIPS Academy", "website": "https://kips.edu.pk", "industry": "Test Preparation", "niche": "entry test prep, mdcat, ecat & coaching academy"},
+            {"name": "STEP by PGC", "website": "https://step.pgc.edu", "industry": "Test Preparation", "niche": "entry test prep, mdcat, ecat & fsc coaching"},
+            {"name": "Maqsad", "website": "https://maqsad.io", "industry": "EdTech", "niche": "edtech app, online test preparation & video learning"},
+            {"name": "Noon Academy", "website": "https://www.learnatnoon.com", "industry": "EdTech", "niche": "social learning platform & online coaching"},
+            {"name": "Nearpeer", "website": "https://www.nearpeer.org", "industry": "EdTech", "niche": "online courses, mdcat, ca & entry test prep"},
+        ],
+        "education": [
+            {"name": "LUMS", "website": "https://lums.edu.pk", "industry": "Higher Education", "niche": "higher education & business school"},
+            {"name": "Beaconhouse School System", "website": "https://www.beaconhouse.net", "industry": "Primary & Secondary Education", "niche": "k-12 schooling & education network"},
+            {"name": "NUST", "website": "https://nust.edu.pk", "industry": "Higher Education", "niche": "science & technology university"},
+            {"name": "The City School", "website": "https://thecityschool.edu.pk", "industry": "Primary & Secondary Education", "niche": "k-12 schooling & cambridge education"},
+            {"name": "FAST NUCES", "website": "https://www.nu.edu.pk", "industry": "Higher Education", "niche": "computer science & IT university"},
+            {"name": "Lahore Grammar School", "website": "https://lgs.edu.pk", "industry": "Primary & Secondary Education", "niche": "private schooling & preschool network"},
+        ],
+        "logistics": [
+            {"name": "TCS Express", "website": "https://www.tcsexpress.com", "industry": "Logistics & Supply Chain", "niche": "express courier, parcel delivery & cargo logistics"},
+            {"name": "Leopards Courier", "website": "https://leopardscourier.com", "industry": "Logistics & Supply Chain", "niche": "domestic courier, cargo & logistics services"},
+            {"name": "M&P Courier", "website": "https://mulphilog.com", "industry": "Logistics & Supply Chain", "niche": "express delivery & distribution network"},
+            {"name": "Trax Logistics", "website": "https://trax.pk", "industry": "Logistics & Supply Chain", "niche": "e-commerce logistics, cash on delivery & fulfillment"},
+            {"name": "Call Courier", "website": "https://callcourier.com.pk", "industry": "Logistics & Supply Chain", "niche": "cash on delivery & parcel delivery services"},
+        ],
+        "energy": [
+            {"name": "Reon Energy", "website": "https://reonenergy.com", "industry": "Renewable Energy & Solar", "niche": "industrial solar energy, microgrids & storage solutions"},
+            {"name": "SkyElectric", "website": "https://skyelectric.com", "industry": "Renewable Energy & Solar", "niche": "smart solar energy systems & hybrid inverters"},
+            {"name": "Pantera Energy", "website": "https://panteraenergy.pk", "industry": "Renewable Energy & Solar", "niche": "commercial & residential solar power installations"},
+            {"name": "Premier Energy", "website": "https://premierenergy.com.pk", "industry": "Renewable Energy & Solar", "niche": "solar EPC & renewable energy solutions"},
+        ],
+        "fitness": [
+            {"name": "Shapes Health Studio", "website": "https://shapes.com.pk", "industry": "Health & Fitness", "niche": "fitness club, gym & wellness center"},
+            {"name": "Structure Health & Fitness", "website": "https://structure.com.pk", "industry": "Health & Fitness", "niche": "gym, personal training & fitness center"},
+            {"name": "Synergy Fitness Club", "website": "https://synergyfitness.pk", "industry": "Health & Fitness", "niche": "strength training & gym club"},
+        ],
+        "hospitality": [
+            {"name": "Pearl Continental Hotels", "website": "https://www.pchotels.com", "industry": "Hospitality & Hotels", "niche": "luxury 5-star hotels & resorts"},
+            {"name": "Serena Hotels Pakistan", "website": "https://www.serenahotels.com", "industry": "Hospitality & Hotels", "niche": "luxury heritage hotels & resorts"},
+            {"name": "Avari Hotels", "website": "https://www.avari.com", "industry": "Hospitality & Hotels", "niche": "luxury hospitality & hotel suites"},
+            {"name": "Nishat Hotel", "website": "https://nishathotel.com", "industry": "Hospitality & Hotels", "niche": "boutique luxury hotel & hospitality"},
+        ],
+    },
+    "uae": {
+        "automotive": [
+            {"name": "Al-Futtaim Motors", "website": "https://www.alfuttaim.com", "industry": "Automotive", "niche": "automotive distribution & dealerships"},
+            {"name": "Al Tayer Motors", "website": "https://www.altayermotors.com", "industry": "Automotive", "niche": "luxury automotive dealerships"},
+            {"name": "Gargash Group", "website": "https://www.gargash.ae", "industry": "Automotive", "niche": "automotive enterprise & dealerships"},
+        ],
+        "real_estate": [
+            {"name": "Emaar Properties", "website": "https://www.emaar.com", "industry": "Real Estate", "niche": "property development & master communities"},
+            {"name": "Damac Properties", "website": "https://www.damacproperties.com", "industry": "Real Estate", "niche": "luxury residential & property development"},
+            {"name": "Bayut", "website": "https://www.bayut.com", "industry": "Real Estate", "niche": "property portal & real estate search"},
+        ],
+        "fintech": [
+            {"name": "Tabby", "website": "https://tabby.ai", "industry": "Fintech", "niche": "buy now pay later & shopping payments"},
+            {"name": "Tamara", "website": "https://tamara.co", "industry": "Fintech", "niche": "split payments & consumer shopping finance"},
+            {"name": "Careem Pay", "website": "https://www.careem.com/en-ae/careem-pay", "industry": "Fintech", "niche": "digital wallet, peer to peer & bill payments"},
+            {"name": "Liv. by Emirates NBD", "website": "https://www.liv.me", "industry": "Fintech", "niche": "digital lifestyle banking & smart finance"},
+            {"name": "Wio Bank", "website": "https://wio.io", "industry": "Fintech", "niche": "digital platform banking for businesses & consumers"},
+        ],
+        "retail": [
+            {"name": "Noon", "website": "https://www.noon.com", "industry": "Retail & E-Commerce", "niche": "digital marketplace, electronics & lifestyle retail"},
+            {"name": "Amazon UAE", "website": "https://www.amazon.ae", "industry": "Retail & E-Commerce", "niche": "online shopping & e-commerce marketplace"},
+            {"name": "Namshi", "website": "https://www.namshi.com", "industry": "Apparel & Fashion", "niche": "online fashion, apparel & beauty retail"},
+            {"name": "Sharaf DG", "website": "https://uae.sharafdg.com", "industry": "Retail & E-Commerce", "niche": "electronics, gadgets & technology retail"},
+        ],
+        "healthcare": [
+            {"name": "Aster DM Healthcare", "website": "https://www.asterdmhealthcare.com", "industry": "Healthcare", "niche": "hospitals, clinics & diagnostic network"},
+            {"name": "NMC Healthcare", "website": "https://nmc.ae", "industry": "Healthcare", "niche": "private multispecialty hospital network"},
+            {"name": "Burjeel Holdings", "website": "https://burjeel.com", "industry": "Healthcare", "niche": "premium healthcare & specialized medical centers"},
+            {"name": "Mediclinic Middle East", "website": "https://www.mediclinic.ae", "industry": "Healthcare", "niche": "private hospital & medical clinic network"},
+        ],
+        "telecom": [
+            {"name": "e& (Etisalat)", "website": "https://www.eand.com", "industry": "Telecommunications", "niche": "telecom, 5g network & digital connectivity"},
+            {"name": "du", "website": "https://www.du.ae", "industry": "Telecommunications", "niche": "mobile network, broadband & corporate telecom"},
+        ],
+        "university": [
+            {"name": "American University of Sharjah (AUS)", "website": "https://www.aus.edu", "industry": "Higher Education", "niche": "higher education & research university"},
+            {"name": "NYU Abu Dhabi", "website": "https://nyuad.nyu.edu", "industry": "Higher Education", "niche": "liberal arts & research university"},
+            {"name": "United Arab Emirates University (UAEU)", "website": "https://www.uaeu.ac.ae", "industry": "Higher Education", "niche": "national comprehensive university"},
+            {"name": "University of Wollongong in Dubai", "website": "https://www.uowdubai.ac.ae", "industry": "Higher Education", "niche": "international university campus"},
+        ],
+        "school": [
+            {"name": "GEMS Education", "website": "https://www.gemseducation.com", "industry": "Primary & Secondary Education", "niche": "international k-12 school network"},
+            {"name": "Taaleem", "website": "https://www.taaleem.ae", "industry": "Primary & Secondary Education", "niche": "premium school management & education"},
+            {"name": "Dubai College", "website": "https://www.dubaicollege.org", "industry": "Primary & Secondary Education", "niche": "british curriculum secondary school"},
+            {"name": "Kings School Dubai", "website": "https://kings-edu.com", "industry": "Primary & Secondary Education", "niche": "british primary & secondary schools"},
+        ],
+        "logistics": [
+            {"name": "Aramex", "website": "https://www.aramex.com", "industry": "Logistics & Supply Chain", "niche": "express international logistics & freight forwarding"},
+            {"name": "Fetchr", "website": "https://fetchr.us", "industry": "Logistics & Supply Chain", "niche": "tech-enabled delivery & logistics services"},
+            {"name": "Careem Box", "website": "https://www.careem.com", "industry": "Logistics & Supply Chain", "niche": "on-demand parcel delivery & courier"},
+        ],
+        "energy": [
+            {"name": "Masdar", "website": "https://masdar.ae", "industry": "Renewable Energy & Solar", "niche": "clean energy, solar power & sustainable development"},
+            {"name": "Yellow Door Energy", "website": "https://yellowdoorenergy.com", "industry": "Renewable Energy & Solar", "niche": "commercial & industrial solar power"},
+            {"name": "SirajPower", "website": "https://sirajpower.com", "industry": "Renewable Energy & Solar", "niche": "distributed solar energy solutions"},
+        ],
+        "fitness": [
+            {"name": "Fitness First Middle East", "website": "https://uae.fitnessfirstme.com", "industry": "Health & Fitness", "niche": "health club, gym & fitness chain"},
+            {"name": "GymNation UAE", "website": "https://gymnation.com", "industry": "Health & Fitness", "niche": "affordable gym club & fitness classes"},
+            {"name": "Warehouse Gym", "website": "https://whgym.com", "industry": "Health & Fitness", "niche": "boutique gym & strength training"},
+        ],
+        "hospitality": [
+            {"name": "Jumeirah Hotels & Resorts", "website": "https://www.jumeirah.com", "industry": "Hospitality & Hotels", "niche": "luxury 5-star hotels & hospitality"},
+            {"name": "Atlantis The Palm", "website": "https://www.atlantis.com/dubai", "industry": "Hospitality & Hotels", "niche": "luxury ocean resort & entertainment destination"},
+            {"name": "Rotana Hotels", "website": "https://www.rotana.com", "industry": "Hospitality & Hotels", "niche": "hotel management & premium suites"},
+        ],
+    },
+    "saudi arabia": {
+        "automotive": [
+            {"name": "Abdul Latif Jameel Motors", "website": "https://www.alj.com", "industry": "Automotive", "niche": "automotive distribution & passenger cars"},
+            {"name": "Al Jazirah Vehicles Agencies", "website": "https://www.aljazirahford.com", "industry": "Automotive", "niche": "automotive dealerships"},
+            {"name": "Aljomaih Automotive", "website": "https://www.aljomaihauto.com", "industry": "Automotive", "niche": "automotive distribution & vehicles"},
+        ],
+        "real_estate": [
+            {"name": "Roshn Group", "website": "https://www.roshn.sa", "industry": "Real Estate", "niche": "community development & real estate"},
+            {"name": "Dar Al Arkan", "website": "https://www.daralarkan.com", "industry": "Real Estate", "niche": "property development & residential"},
+        ],
+        "fintech": [
+            {"name": "stc pay", "website": "https://stcpay.com.sa", "industry": "Fintech", "niche": "digital wallet, money transfers & digital banking"},
+            {"name": "Tamara KSA", "website": "https://tamara.co", "industry": "Fintech", "niche": "split payments & consumer shopping finance"},
+            {"name": "Tabby KSA", "website": "https://tabby.ai", "industry": "Fintech", "niche": "buy now pay later & shopping payments"},
+            {"name": "Urpay", "website": "https://urpay.com.sa", "industry": "Fintech", "niche": "digital financial services wallet"},
+        ],
+        "retail": [
+            {"name": "Jarir Bookstore", "website": "https://www.jarir.com", "industry": "Retail & E-Commerce", "niche": "electronics, books & consumer technology retail"},
+            {"name": "Extra Stores", "website": "https://www.extra.com", "industry": "Retail & E-Commerce", "niche": "consumer electronics & home appliances retail"},
+            {"name": "Noon KSA", "website": "https://www.noon.com/saudi-en", "industry": "Retail & E-Commerce", "niche": "e-commerce marketplace & shopping"},
+            {"name": "Panda Retail", "website": "https://panda.com.sa", "industry": "Retail & E-Commerce", "niche": "hypermarkets & grocery retail chain"},
+        ],
+        "healthcare": [
+            {"name": "Dr. Sulaiman Al Habib Medical Group", "website": "https://drsulaimanalhabib.com", "industry": "Healthcare", "niche": "multispecialty tertiary hospitals & medical centers"},
+            {"name": "Mouwasat Medical Services", "website": "https://www.mouwasat.com", "industry": "Healthcare", "niche": "hospital network & specialized healthcare"},
+            {"name": "Saudi German Health", "website": "https://sghgroup.com", "industry": "Healthcare", "niche": "tertiary hospitals & medical facilities"},
+            {"name": "Dallah Healthcare", "website": "https://dallah-hospital.com", "industry": "Healthcare", "niche": "private hospitals & healthcare services"},
+        ],
+        "telecom": [
+            {"name": "stc", "website": "https://www.stc.com.sa", "industry": "Telecommunications", "niche": "telecom, 5g network, fiber & enterprise digital services"},
+            {"name": "Mobily", "website": "https://www.mobily.com.sa", "industry": "Telecommunications", "niche": "cellular telecom, broadband & digital solutions"},
+            {"name": "Zain KSA", "website": "https://sa.zain.com", "industry": "Telecommunications", "niche": "telecommunications network & 5g mobile packages"},
+        ],
+        "university": [
+            {"name": "KAUST", "website": "https://www.kaust.edu.sa", "industry": "Higher Education", "niche": "science & technology graduate research university"},
+            {"name": "KFUPM", "website": "https://www.kfupm.edu.sa", "industry": "Higher Education", "niche": "petroleum, minerals & engineering university"},
+            {"name": "King Saud University", "website": "https://ksu.edu.sa", "industry": "Higher Education", "niche": "public research university"},
+            {"name": "King Abdulaziz University", "website": "https://www.kau.edu.sa", "industry": "Higher Education", "niche": "higher education & research"},
+        ],
+        "school": [
+            {"name": "British International School Riyadh", "website": "https://www.bisr.com.sa", "industry": "Primary & Secondary Education", "niche": "british curriculum international school"},
+            {"name": "American International School Riyadh", "website": "https://www.aisr.org", "industry": "Primary & Secondary Education", "niche": "american curriculum international school"},
+            {"name": "Kingdom Schools", "website": "https://www.kingdomschools.edu.sa", "industry": "Primary & Secondary Education", "niche": "private k-12 schooling"},
+        ],
+        "logistics": [
+            {"name": "SMSA Express", "website": "https://www.smsaexpress.com", "industry": "Logistics & Supply Chain", "niche": "express courier, parcel delivery & cargo transport"},
+            {"name": "Naqel Express", "website": "https://www.naqelexpress.com", "industry": "Logistics & Supply Chain", "niche": "logistics supply chain & cold chain transport"},
+            {"name": "SPL (Saudi Post)", "website": "https://splonline.com.sa", "industry": "Logistics & Supply Chain", "niche": "national postal & parcel logistics"},
+        ],
+        "energy": [
+            {"name": "ACWA Power", "website": "https://acwapower.com", "industry": "Renewable Energy & Solar", "niche": "power generation, solar energy & green hydrogen"},
+            {"name": "Desert Technologies", "website": "https://desert-technologies.com", "industry": "Renewable Energy & Solar", "niche": "solar PV panels, energy storage & renewable solutions"},
+        ],
+        "fitness": [
+            {"name": "Fitness Time", "website": "https://fitnesstime.com.sa", "industry": "Health & Fitness", "niche": "sports club & fitness center network"},
+            {"name": "Bodymasters", "website": "https://bodymasters.com.sa", "industry": "Health & Fitness", "niche": "fitness centers & health clubs"},
+        ],
+        "hospitality": [
+            {"name": "Dur Hospitality", "website": "https://dur.sa", "industry": "Hospitality & Hotels", "niche": "hotel operations, residential compounds & hospitality"},
+            {"name": "Al Khozama", "website": "https://alkhozama.com", "industry": "Hospitality & Hotels", "niche": "luxury hospitality & hotel properties"},
+        ],
+    },
+    "united kingdom": {
+        "automotive": [
+            {"name": "Arnold Clark", "website": "https://www.arnoldclark.com", "industry": "Automotive", "niche": "car dealerships & automotive retail"},
+            {"name": "Lookers", "website": "https://www.lookers.co.uk", "industry": "Automotive", "niche": "motor retail & car dealerships"},
+            {"name": "Auto Trader UK", "website": "https://www.autotrader.co.uk", "industry": "Automotive", "niche": "digital automotive marketplace"},
+            {"name": "Cazoo", "website": "https://www.cazoo.co.uk", "industry": "Automotive", "niche": "online car retail & buying platform"},
+        ],
+        "university": [
+            {"name": "University of Oxford", "website": "https://www.ox.ac.uk", "industry": "Higher Education", "niche": "collegiate research university"},
+            {"name": "University of Cambridge", "website": "https://www.cam.ac.uk", "industry": "Higher Education", "niche": "collegiate research university"},
+            {"name": "Imperial College London", "website": "https://www.imperial.ac.uk", "industry": "Higher Education", "niche": "science, engineering & medicine university"},
+            {"name": "University College London (UCL)", "website": "https://www.ucl.ac.uk", "industry": "Higher Education", "niche": "multidisciplinary research university"},
+            {"name": "London School of Economics (LSE)", "website": "https://www.lse.ac.uk", "industry": "Higher Education", "niche": "social sciences, finance & economics university"},
+            {"name": "University of Edinburgh", "website": "https://www.ed.ac.uk", "industry": "Higher Education", "niche": "public research university"},
+        ],
+        "school": [
+            {"name": "Eton College", "website": "https://www.etoncollege.com", "industry": "Primary & Secondary Education", "niche": "independent boarding school"},
+            {"name": "Harrow School", "website": "https://www.harrowschool.org.uk", "industry": "Primary & Secondary Education", "niche": "independent boarding school"},
+            {"name": "Westminster School", "website": "https://www.westminster.org.uk", "industry": "Primary & Secondary Education", "niche": "independent day and boarding school"},
+            {"name": "Winchester College", "website": "https://www.winchestercollege.org", "industry": "Primary & Secondary Education", "niche": "independent boarding school"},
+        ],
+        "fintech": [
+            {"name": "Revolut", "website": "https://www.revolut.com", "industry": "Fintech", "niche": "digital banking, currency exchange & global accounts"},
+            {"name": "Monzo", "website": "https://monzo.com", "industry": "Fintech", "niche": "digital mobile bank & personal finance"},
+            {"name": "Wise", "website": "https://wise.com", "industry": "Fintech", "niche": "cross-border money transfers & multi-currency banking"},
+            {"name": "Starling Bank", "website": "https://www.starlingbank.com", "industry": "Fintech", "niche": "digital banking & business accounts"},
+        ],
+        "retail": [
+            {"name": "ASOS", "website": "https://www.asos.com", "industry": "Apparel & Fashion", "niche": "online fashion & beauty retail"},
+            {"name": "Farfetch", "website": "https://www.farfetch.com", "industry": "Apparel & Fashion", "niche": "luxury fashion & designer marketplace"},
+            {"name": "Gymshark", "website": "https://www.gymshark.com", "industry": "Apparel & Fashion", "niche": "fitness apparel & athletic wear"},
+            {"name": "Boohoo", "website": "https://www.boohoo.com", "industry": "Apparel & Fashion", "niche": "fast fashion e-commerce"},
+            {"name": "Next", "website": "https://www.next.co.uk", "industry": "Retail & E-Commerce", "niche": "clothing, footwear & home products"},
+        ],
+        "real_estate": [
+            {"name": "Rightmove", "website": "https://www.rightmove.co.uk", "industry": "Real Estate", "niche": "property portal & real estate search"},
+            {"name": "Zoopla", "website": "https://www.zoopla.co.uk", "industry": "Real Estate", "niche": "property search & real estate market data"},
+            {"name": "Savills UK", "website": "https://www.savills.co.uk", "industry": "Real Estate", "niche": "global real estate services & property advisory"},
+            {"name": "Knight Frank", "website": "https://www.knightfrank.co.uk", "industry": "Real Estate", "niche": "residential & commercial property consultancy"},
+        ],
+        "healthcare": [
+            {"name": "Bupa UK", "website": "https://www.bupa.co.uk", "industry": "Healthcare", "niche": "health insurance, private clinics & care homes"},
+            {"name": "Babylon Health", "website": "https://www.babylonhealth.com", "industry": "Healthcare", "niche": "digital healthcare & virtual doctor consultations"},
+            {"name": "Boots UK", "website": "https://www.boots.com", "industry": "Healthcare", "niche": "pharmacy, health & beauty retail"},
+        ],
+        "telecom": [
+            {"name": "BT Group", "website": "https://www.bt.com", "industry": "Telecommunications", "niche": "broadband, fixed line & enterprise telecom"},
+            {"name": "Vodafone UK", "website": "https://www.vodafone.co.uk", "industry": "Telecommunications", "niche": "mobile network & 5G telecom"},
+            {"name": "EE", "website": "https://ee.co.uk", "industry": "Telecommunications", "niche": "mobile network & broadband services"},
+        ],
+        "logistics": [
+            {"name": "Royal Mail", "website": "https://www.royalmail.com", "industry": "Logistics & Supply Chain", "niche": "postal delivery, courier & parcel services"},
+            {"name": "DPD UK", "website": "https://www.dpd.co.uk", "industry": "Logistics & Supply Chain", "niche": "express parcel delivery & logistics"},
+        ],
+        "energy": [
+            {"name": "Octopus Energy", "website": "https://octopus.energy", "industry": "Renewable Energy & Utilities", "niche": "green renewable electricity & smart technology"},
+            {"name": "Lightsource bp", "website": "https://lightsourcebp.com", "industry": "Renewable Energy & Solar", "niche": "solar energy development & renewable power"},
+            {"name": "SolarEdge UK", "website": "https://www.solaredge.com/uk", "industry": "Renewable Energy & Solar", "niche": "smart solar inverters & energy storage"},
+        ],
+        "fitness": [
+            {"name": "PureGym", "website": "https://www.puregym.com", "industry": "Health & Fitness", "niche": "affordable 24/7 gym & fitness chain"},
+            {"name": "The Gym Group", "website": "https://www.thegymgroup.com", "industry": "Health & Fitness", "niche": "low-cost gym club & fitness classes"},
+            {"name": "David Lloyd Clubs", "website": "https://www.davidlloyd.co.uk", "industry": "Health & Fitness", "niche": "premium health, spa & racquets clubs"},
+        ],
+        "hospitality": [
+            {"name": "Premier Inn", "website": "https://www.premierinn.com", "industry": "Hospitality & Hotels", "niche": "hotel chain & comfortable stays"},
+            {"name": "Travelodge UK", "website": "https://www.travelodge.co.uk", "industry": "Hospitality & Hotels", "niche": "budget hotel chain & accommodation"},
+            {"name": "InterContinental Hotels Group", "website": "https://www.ihg.com", "industry": "Hospitality & Hotels", "niche": "global luxury hotel & resort brands"},
+        ],
+    },
+    "united states": {
+        "automotive": [
+            {"name": "Tesla", "website": "https://www.tesla.com", "industry": "Automotive", "niche": "electric vehicles, clean energy & automotive"},
+            {"name": "CarMax", "website": "https://www.carmax.com", "industry": "Automotive", "niche": "used car retail & automotive dealerships"},
+            {"name": "Carvana", "website": "https://www.carvana.com", "industry": "Automotive", "niche": "e-commerce automotive platform"},
+            {"name": "AutoNation", "website": "https://www.autonation.com", "industry": "Automotive", "niche": "automotive retailer & dealerships"},
+            {"name": "Rivian", "website": "https://rivian.com", "industry": "Automotive", "niche": "electric trucks & adventure vehicles"},
+        ],
+        "university": [
+            {"name": "Harvard University", "website": "https://www.harvard.edu", "industry": "Higher Education", "niche": "ivy league research university"},
+            {"name": "Stanford University", "website": "https://www.stanford.edu", "industry": "Higher Education", "niche": "private research university"},
+            {"name": "MIT", "website": "https://www.mit.edu", "industry": "Higher Education", "niche": "science & technology institute"},
+            {"name": "Columbia University", "website": "https://www.columbia.edu", "industry": "Higher Education", "niche": "ivy league research university"},
+            {"name": "UC Berkeley", "website": "https://www.berkeley.edu", "industry": "Higher Education", "niche": "public research university"},
+            {"name": "Princeton University", "website": "https://www.princeton.edu", "industry": "Higher Education", "niche": "ivy league research university"},
+            {"name": "Yale University", "website": "https://www.yale.edu", "industry": "Higher Education", "niche": "ivy league research university"},
+            {"name": "Caltech", "website": "https://www.caltech.edu", "industry": "Higher Education", "niche": "science & engineering research institute"},
+            {"name": "Carnegie Mellon University", "website": "https://www.cmu.edu", "industry": "Higher Education", "niche": "computer science, AI & robotics university"},
+            {"name": "Cornell University", "website": "https://www.cornell.edu", "industry": "Higher Education", "niche": "ivy league research university"},
+        ],
+        "school": [
+            {"name": "Phillips Exeter Academy", "website": "https://www.exeter.edu", "industry": "Primary & Secondary Education", "niche": "independent co-educational school"},
+            {"name": "Phillips Academy Andover", "website": "https://www.andover.edu", "industry": "Primary & Secondary Education", "niche": "co-educational boarding school"},
+            {"name": "Trinity School NYC", "website": "https://www.trinityschoolnyc.org", "industry": "Primary & Secondary Education", "niche": "independent preparatory school"},
+            {"name": "St. Paul's School", "website": "https://www.sps.edu", "industry": "Primary & Secondary Education", "niche": "college-preparatory boarding school"},
+            {"name": "The Lawrenceville School", "website": "https://www.lawrenceville.org", "industry": "Primary & Secondary Education", "niche": "co-educational preparatory boarding school"},
+        ],
+        "fintech": [
+            {"name": "Stripe", "website": "https://stripe.com", "industry": "Fintech", "niche": "online payment processing & financial infrastructure"},
+            {"name": "Block (Square)", "website": "https://squareup.com", "industry": "Fintech", "niche": "pos systems, merchant payments & financial services"},
+            {"name": "Robinhood", "website": "https://robinhood.com", "industry": "Fintech", "niche": "commission-free stock trading & investing app"},
+            {"name": "Chime", "website": "https://www.chime.com", "industry": "Fintech", "niche": "mobile banking & digital financial accounts"},
+            {"name": "Plaid", "website": "https://plaid.com", "industry": "Fintech", "niche": "financial data network & banking api"},
+            {"name": "Coinbase", "website": "https://www.coinbase.com", "industry": "Fintech", "niche": "cryptocurrency exchange & digital asset platform"},
+        ],
+        "retail": [
+            {"name": "Amazon", "website": "https://www.amazon.com", "industry": "Retail & E-Commerce", "niche": "online marketplace & cloud retail"},
+            {"name": "Shopify Stores / Revolve", "website": "https://www.revolve.com", "industry": "Apparel & Fashion", "niche": "trendy designer apparel & fashion e-commerce"},
+            {"name": "Shein US", "website": "https://us.shein.com", "industry": "Apparel & Fashion", "niche": "fast fashion e-commerce & apparel"},
+            {"name": "Nike", "website": "https://www.nike.com", "industry": "Apparel & Fashion", "niche": "athletic footwear, apparel & sports equipment"},
+            {"name": "Lululemon", "website": "https://shop.lululemon.com", "industry": "Apparel & Fashion", "niche": "technical athletic apparel & yoga wear"},
+            {"name": "Nordstrom", "website": "https://www.nordstrom.com", "industry": "Retail & E-Commerce", "niche": "luxury department store & fashion retail"},
+            {"name": "Target", "website": "https://www.target.com", "industry": "Retail & E-Commerce", "niche": "general merchandise & retail discount store"},
+        ],
+        "real_estate": [
+            {"name": "Zillow", "website": "https://www.zillow.com", "industry": "Real Estate", "niche": "real estate marketplace & property valuations"},
+            {"name": "Redfin", "website": "https://www.redfin.com", "industry": "Real Estate", "niche": "full-service real estate brokerage & listings"},
+            {"name": "Compass", "website": "https://www.compass.com", "industry": "Real Estate", "niche": "technology-driven residential real estate brokerage"},
+            {"name": "CBRE", "website": "https://www.cbre.com", "industry": "Real Estate", "niche": "commercial real estate services & investment"},
+            {"name": "JLL", "website": "https://www.us.jll.com", "industry": "Real Estate", "niche": "commercial real estate & property investment management"},
+        ],
+        "healthcare": [
+            {"name": "Teladoc Health", "website": "https://www.teladochealth.com", "industry": "Healthcare", "niche": "virtual healthcare, telehealth & digital medicine"},
+            {"name": "Mayo Clinic", "website": "https://www.mayoclinic.org", "industry": "Healthcare", "niche": "integrated clinical practice, education & research hospital"},
+            {"name": "Cleveland Clinic", "website": "https://my.clevelandclinic.org", "industry": "Healthcare", "niche": "multispecialty academic medical center"},
+            {"name": "One Medical", "website": "https://www.onemedical.com", "industry": "Healthcare", "niche": "technology-powered primary healthcare clinic"},
+            {"name": "Quest Diagnostics", "website": "https://www.questdiagnostics.com", "industry": "Healthcare", "niche": "diagnostic testing & clinical pathology laboratory"},
+        ],
+        "telecom": [
+            {"name": "Verizon", "website": "https://www.verizon.com", "industry": "Telecommunications", "niche": "wireless network, broadband & 5G connectivity"},
+            {"name": "AT&T", "website": "https://www.att.com", "industry": "Telecommunications", "niche": "telecommunications, mobile network & high-speed fiber"},
+            {"name": "T-Mobile US", "website": "https://www.t-mobile.com", "industry": "Telecommunications", "niche": "wireless network & 5G telecom provider"},
+        ],
+        "logistics": [
+            {"name": "FedEx", "website": "https://www.fedex.com", "industry": "Logistics & Supply Chain", "niche": "global courier delivery & express freight"},
+            {"name": "UPS", "website": "https://www.ups.com", "industry": "Logistics & Supply Chain", "niche": "package delivery, supply chain & freight forwarding"},
+            {"name": "Flexport", "website": "https://www.flexport.com", "industry": "Logistics & Supply Chain", "niche": "digital freight forwarding & supply chain logistics"},
+            {"name": "ShipBob", "website": "https://www.shipbob.com", "industry": "Logistics & Supply Chain", "niche": "ecommerce order fulfillment & 3PL logistics"},
+        ],
+        "academy": [
+            {"name": "Coursera", "website": "https://www.coursera.org", "industry": "EdTech", "niche": "online learning platform, university degrees & professional certificates"},
+            {"name": "edX", "website": "https://www.edx.org", "industry": "EdTech", "niche": "online university courses & master degree programs"},
+            {"name": "Khan Academy", "website": "https://www.khanacademy.org", "industry": "EdTech", "niche": "free online education & k-12 test prep"},
+            {"name": "Udacity", "website": "https://www.udacity.com", "industry": "EdTech", "niche": "tech nanodegrees, AI, coding & cloud training"},
+        ],
+        "energy": [
+            {"name": "Sunrun", "website": "https://www.sunrun.com", "industry": "Renewable Energy & Solar", "niche": "residential solar panel installations & home battery storage"},
+            {"name": "Tesla Solar", "website": "https://www.tesla.com/solarpanels", "industry": "Renewable Energy & Solar", "niche": "solar roof tiles, clean energy & powerwall batteries"},
+            {"name": "SunPower", "website": "https://us.sunpower.com", "industry": "Renewable Energy & Solar", "niche": "residential & commercial solar power systems"},
+            {"name": "Enphase Energy", "website": "https://enphase.com", "industry": "Renewable Energy & Solar", "niche": "microinverter technology & home energy systems"},
+        ],
+        "fitness": [
+            {"name": "Equinox", "website": "https://www.equinox.com", "industry": "Health & Fitness", "niche": "luxury fitness club, personal training & wellness"},
+            {"name": "Planet Fitness", "website": "https://www.planetfitness.com", "industry": "Health & Fitness", "niche": "nationwide affordable gym & fitness centers"},
+            {"name": "Life Time", "website": "https://www.lifetime.life", "industry": "Health & Fitness", "niche": "athletic country resorts, gyms & wellness centers"},
+            {"name": "LA Fitness", "website": "https://www.lafitness.com", "industry": "Health & Fitness", "niche": "health club, gym facilities & group fitness"},
+        ],
+        "hospitality": [
+            {"name": "Marriott International", "website": "https://www.marriott.com", "industry": "Hospitality & Hotels", "niche": "global hotel portfolio & luxury hospitality"},
+            {"name": "Hilton Hotels & Resorts", "website": "https://www.hilton.com", "industry": "Hospitality & Hotels", "niche": "global hotel hospitality & luxury suites"},
+            {"name": "Hyatt Hotels", "website": "https://www.hyatt.com", "industry": "Hospitality & Hotels", "niche": "hospitality management, luxury hotels & resorts"},
+            {"name": "Wyndham Hotels & Resorts", "website": "https://www.wyndhamhotels.com", "industry": "Hospitality & Hotels", "niche": "hotel franchise & hospitality chains"},
+        ],
+    },
+    "india": {
+        "automotive": [
+            {"name": "Tata Motors", "website": "https://www.tatamotors.com", "industry": "Automotive", "niche": "passenger vehicles, commercial & EV"},
+            {"name": "Mahindra & Mahindra", "website": "https://www.mahindra.com", "industry": "Automotive", "niche": "SUVs, electric vehicles & automotive"},
+            {"name": "Maruti Suzuki India", "website": "https://www.marutisuzuki.com", "industry": "Automotive", "niche": "passenger cars & hatchbacks"},
+            {"name": "Hyundai Motor India", "website": "https://www.hyundai.com/in", "industry": "Automotive", "niche": "SUVs, sedans & passenger cars"},
+            {"name": "Hero MotoCorp", "website": "https://www.heromotocorp.com", "industry": "Automotive", "niche": "two-wheelers & motorcycles"},
+            {"name": "Bajaj Auto", "website": "https://www.bajajauto.com", "industry": "Automotive", "niche": "two-wheelers & commercial three-wheelers"},
+        ],
+        "university": [
+            {"name": "IIT Bombay", "website": "https://www.iitb.ac.in", "industry": "Higher Education", "niche": "premier engineering & technology institute"},
+            {"name": "IIT Delhi", "website": "https://home.iitd.ac.in", "industry": "Higher Education", "niche": "institute of national importance & research"},
+            {"name": "BITS Pilani", "website": "https://www.bits-pilani.ac.in", "industry": "Higher Education", "niche": "science & technology research university"},
+            {"name": "University of Delhi", "website": "https://www.du.ac.in", "industry": "Higher Education", "niche": "central comprehensive public university"},
+            {"name": "IIT Madras", "website": "https://www.iitm.ac.in", "industry": "Higher Education", "niche": "technical institute & higher education"},
+            {"name": "Ashoka University", "website": "https://www.ashoka.edu.in", "industry": "Higher Education", "niche": "liberal arts & sciences private university"},
+            {"name": "Manipal Academy of Higher Education", "website": "https://www.manipal.edu", "industry": "Higher Education", "niche": "deemed research university"},
+            {"name": "Jawaharlal Nehru University (JNU)", "website": "https://www.jnu.ac.in", "industry": "Higher Education", "niche": "public research university & social sciences"},
+            {"name": "Anna University", "website": "https://www.annauniv.edu", "industry": "Higher Education", "niche": "state technical university"},
+            {"name": "Amity University", "website": "https://www.amity.edu", "industry": "Higher Education", "niche": "private research & higher education network"},
+        ],
+        "school": [
+            {"name": "The Doon School", "website": "https://www.doonschool.com", "industry": "Primary & Secondary Education", "niche": "all-boys boarding school"},
+            {"name": "Delhi Public School (DPS)", "website": "https://www.dpsrkp.net", "industry": "Primary & Secondary Education", "niche": "cbse nationwide school network"},
+            {"name": "The Shri Ram School", "website": "https://www.tsrs.org", "industry": "Primary & Secondary Education", "niche": "icse & ib curriculum private schooling"},
+            {"name": "Cathedral and John Connon School", "website": "https://cathedral-school.com", "industry": "Primary & Secondary Education", "niche": "co-educational private school"},
+            {"name": "Dhirubhai Ambani International School", "website": "https://www.dais.edu.in", "industry": "Primary & Secondary Education", "niche": "ib world school & international education"},
+        ],
+        "college": [
+            {"name": "St. Stephen's College", "website": "https://www.ststephens.edu", "industry": "College Education", "niche": "liberal arts & sciences constituent college"},
+            {"name": "Loyola College Chennai", "website": "https://www.loyolacollege.edu", "industry": "College Education", "niche": "autonomous arts and science college"},
+            {"name": "St. Xavier's College Mumbai", "website": "https://xaviers.ac", "industry": "College Education", "niche": "autonomous undergraduate & postgraduate college"},
+            {"name": "Hindu College Delhi", "website": "https://hinducollege.ac.in", "industry": "College Education", "niche": "arts, science & commerce college"},
+        ],
+        "academy": [
+            {"name": "FIITJEE", "website": "https://www.fiitjee.com", "industry": "Test Preparation", "niche": "iit jee, engineering & foundation test prep"},
+            {"name": "Allen Career Institute", "website": "https://www.allen.ac.in", "industry": "Test Preparation", "niche": "neet, jee coaching & test prep"},
+            {"name": "Aakash Institute", "website": "https://www.aakash.ac.in", "industry": "Test Preparation", "niche": "medical & engineering entrance test coaching"},
+            {"name": "Physics Wallah", "website": "https://www.pw.live", "industry": "EdTech", "niche": "online education, jee & neet prep platform"},
+            {"name": "Unacademy", "website": "https://unacademy.com", "industry": "EdTech", "niche": "online learning & competitive exam prep"},
+        ],
+        "software": [
+            {"name": "Tata Consultancy Services (TCS)", "website": "https://www.tcs.com", "industry": "IT Services", "niche": "global it consulting & digital solutions"},
+            {"name": "Infosys", "website": "https://www.infosys.com", "industry": "IT Services", "niche": "digital services, consulting & it outsourcing"},
+            {"name": "Wipro", "website": "https://www.wipro.com", "industry": "IT Services", "niche": "technology consulting & enterprise it services"},
+            {"name": "HCLTech", "website": "https://www.hcltech.com", "industry": "IT Services", "niche": "global technology & digital engineering services"},
+            {"name": "Zoho Corporation", "website": "https://www.zoho.com", "industry": "Software & SaaS", "niche": "cloud software suite & business applications"},
+            {"name": "Freshworks", "website": "https://www.freshworks.com", "industry": "Software & SaaS", "niche": "customer engagement & itsm software"},
+        ],
+        "fintech": [
+            {"name": "Paytm", "website": "https://paytm.com", "industry": "Fintech", "niche": "digital payments, financial services & merchant commerce"},
+            {"name": "PhonePe", "website": "https://www.phonepe.com", "industry": "Fintech", "niche": "digital payments & upi ecosystem"},
+            {"name": "Razorpay", "website": "https://razorpay.com", "industry": "Fintech", "niche": "payment gateway & business banking"},
+            {"name": "Zerodha", "website": "https://zerodha.com", "industry": "Fintech", "niche": "discount stock brokerage & trading platform"},
+        ],
+        "retail": [
+            {"name": "Flipkart", "website": "https://www.flipkart.com", "industry": "Retail & E-Commerce", "niche": "e-commerce marketplace & online retail"},
+            {"name": "Reliance Retail", "website": "https://relianceretail.com", "industry": "Retail", "niche": "omnichannel retail & consumer goods"},
+            {"name": "Nykaa", "website": "https://www.nykaa.com", "industry": "Retail & E-Commerce", "niche": "beauty, cosmetics & fashion e-commerce"},
+            {"name": "Myntra", "website": "https://www.myntra.com", "industry": "Retail & E-Commerce", "niche": "fashion & lifestyle e-commerce"},
+        ],
+    },
+    "canada": {
+        "university": [
+            {"name": "University of Toronto", "website": "https://www.utoronto.ca", "industry": "Higher Education", "niche": "public research university"},
+            {"name": "University of British Columbia (UBC)", "website": "https://www.ubc.ca", "industry": "Higher Education", "niche": "public research university & higher education"},
+            {"name": "McGill University", "website": "https://www.mcgill.ca", "industry": "Higher Education", "niche": "public research university & medical school"},
+            {"name": "University of Waterloo", "website": "https://uwaterloo.ca", "industry": "Higher Education", "niche": "computer science, engineering & co-op education"},
+        ],
+        "school": [
+            {"name": "Upper Canada College", "website": "https://www.ucc.on.ca", "industry": "Primary & Secondary Education", "niche": "ib continuum boys school"},
+            {"name": "Branksome Hall", "website": "https://www.branksome.on.ca", "industry": "Primary & Secondary Education", "niche": "ib world school for girls"},
+        ],
+        "fintech": [
+            {"name": "Wealthsimple", "website": "https://www.wealthsimple.com", "industry": "Fintech", "niche": "digital investing, automated trading & savings"},
+            {"name": "Nuvei", "website": "https://nuvei.com", "industry": "Fintech", "niche": "global payment technology & payment processing"},
+        ],
+        "retail": [
+            {"name": "Shopify", "website": "https://www.shopify.com", "industry": "E-Commerce", "niche": "global ecommerce platform & retail technology"},
+            {"name": "SSENSE", "website": "https://www.ssense.com", "industry": "Apparel & Fashion", "niche": "luxury streetwear & designer fashion e-commerce"},
+            {"name": "Canada Goose", "website": "https://www.canadagoose.com", "industry": "Apparel & Fashion", "niche": "luxury outerwear & cold-weather apparel"},
+            {"name": "Aritzia", "website": "https://www.aritzia.com", "industry": "Apparel & Fashion", "niche": "women's fashion & luxury apparel retail"},
+        ],
+        "telecom": [
+            {"name": "Rogers Communications", "website": "https://www.rogers.com", "industry": "Telecommunications", "niche": "wireless, high-speed internet & media telecom"},
+            {"name": "Bell Canada", "website": "https://www.bell.ca", "industry": "Telecommunications", "niche": "telecom services, fiber broadband & mobile network"},
+        ],
+    },
+    "australia": {
+        "university": [
+            {"name": "University of Melbourne", "website": "https://www.unimelb.edu.au", "industry": "Higher Education", "niche": "public research university"},
+            {"name": "University of Sydney", "website": "https://www.sydney.edu.au", "industry": "Higher Education", "niche": "comprehensive research university"},
+            {"name": "Australian National University (ANU)", "website": "https://www.anu.edu.au", "industry": "Higher Education", "niche": "national research university"},
+            {"name": "University of Queensland", "website": "https://www.uq.edu.au", "industry": "Higher Education", "niche": "research university & higher education"},
+            {"name": "University of New South Wales (UNSW)", "website": "https://www.unsw.edu.au", "industry": "Higher Education", "niche": "engineering & business university"},
+        ],
+        "school": [
+            {"name": "Sydney Grammar School", "website": "https://www.sydgram.nsw.edu.au", "industry": "Primary & Secondary Education", "niche": "independent day school for boys"},
+            {"name": "Scotch College Melbourne", "website": "https://www.scotch.vic.edu.au", "industry": "Primary & Secondary Education", "niche": "independent presbyterian day and boarding school"},
+        ],
+        "fintech": [
+            {"name": "Afterpay", "website": "https://www.afterpay.com", "industry": "Fintech", "niche": "buy now pay later & digital payments"},
+            {"name": "Airwallex", "website": "https://www.airwallex.com", "industry": "Fintech", "niche": "global cross-border payments & financial platform"},
+            {"name": "Judo Bank", "website": "https://www.judo.bank", "industry": "Fintech", "niche": "digital neo-bank for small and medium businesses"},
+        ],
+        "retail": [
+            {"name": "Cotton On Group", "website": "https://cottonon.com", "industry": "Apparel & Fashion", "niche": "casual apparel & global retail"},
+            {"name": "The Iconic", "website": "https://www.theiconic.com.au", "industry": "Apparel & Fashion", "niche": "online fashion, sportswear & footwear retail"},
+            {"name": "Zimmermann", "website": "https://www.zimmermann.com", "industry": "Apparel & Fashion", "niche": "luxury designer fashion & resort wear"},
+        ],
+        "real_estate": [
+            {"name": "REA Group (realestate.com.au)", "website": "https://www.realestate.com.au", "industry": "Real Estate", "niche": "digital property portal & residential real estate"},
+            {"name": "Domain Group", "website": "https://www.domain.com.au", "industry": "Real Estate", "niche": "real estate marketplace & property listings"},
+        ],
+        "telecom": [
+            {"name": "Telstra", "website": "https://www.telstra.com.au", "industry": "Telecommunications", "niche": "telecommunications, 5G mobile & broadband network"},
+            {"name": "Optus", "website": "https://www.optus.com.au", "industry": "Telecommunications", "niche": "cellular telecom, mobile & enterprise connectivity"},
+        ],
+    },
+    "germany": {
+        "university": [
+            {"name": "Technical University of Munich (TUM)", "website": "https://www.tum.de", "industry": "Higher Education", "niche": "technical university & engineering research"},
+            {"name": "LMU Munich", "website": "https://www.lmu.de", "industry": "Higher Education", "niche": "public research university"},
+            {"name": "Heidelberg University", "website": "https://www.uni-heidelberg.de", "industry": "Higher Education", "niche": "research university & medicine"},
+        ],
+        "fintech": [
+            {"name": "N26", "website": "https://n26.com", "industry": "Fintech", "niche": "mobile digital banking & neo-bank"},
+            {"name": "Trade Republic", "website": "https://traderepublic.com", "industry": "Fintech", "niche": "mobile commission-free broker & savings"},
+        ],
+        "retail": [
+            {"name": "Zalando", "website": "https://www.zalando.com", "industry": "Apparel & Fashion", "niche": "online fashion & lifestyle e-commerce platform"},
+            {"name": "About You", "website": "https://corporate.aboutyou.de", "industry": "Apparel & Fashion", "niche": "personalized fashion e-commerce"},
+            {"name": "Hugo Boss", "website": "https://www.hugoboss.com", "industry": "Apparel & Fashion", "niche": "premium & luxury apparel fashion house"},
+            {"name": "Adidas", "website": "https://www.adidas.com", "industry": "Apparel & Fashion", "niche": "sportswear, athletic shoes & sporting goods"},
+            {"name": "Puma", "website": "https://about.puma.com", "industry": "Apparel & Fashion", "niche": "sports apparel, footwear & lifestyle retail"},
+        ],
+        "automotive": [
+            {"name": "Auto1 Group", "website": "https://www.auto1-group.com", "industry": "Automotive", "niche": "digital automotive platform & car trading"},
+            {"name": "Mobile.de", "website": "https://www.mobile.de", "industry": "Automotive", "niche": "vehicle marketplace & automotive search"},
+        ],
+    },
+    "singapore": {
+        "university": [
+            {"name": "National University of Singapore (NUS)", "website": "https://www.nus.edu.sg", "industry": "Higher Education", "niche": "autonomous comprehensive research university"},
+            {"name": "Nanyang Technological University (NTU)", "website": "https://www.ntu.edu.sg", "industry": "Higher Education", "niche": "research-intensive technical university"},
+            {"name": "Singapore Management University (SMU)", "website": "https://www.smu.edu.sg", "industry": "Higher Education", "niche": "business, economics & law university"},
+        ],
+        "school": [
+            {"name": "Raffles Institution", "website": "https://www.ri.edu.sg", "industry": "Primary & Secondary Education", "niche": "premier independent school"},
+            {"name": "Hwa Chong Institution", "website": "https://www.hci.edu.sg", "industry": "Primary & Secondary Education", "niche": "independent premier school"},
+        ],
+        "fintech": [
+            {"name": "Grab Financial Group", "website": "https://www.grab.com/sg/financial", "industry": "Fintech", "niche": "digital payments, micro-financing & fintech ecosystem"},
+            {"name": "Endowus", "website": "https://endowus.com", "industry": "Fintech", "niche": "digital wealth advisor & investment platform"},
+        ],
+        "retail": [
+            {"name": "Shopee / Sea Group", "website": "https://shopee.sg", "industry": "Retail & E-Commerce", "niche": "e-commerce marketplace & digital retail"},
+            {"name": "Love, Bonito", "website": "https://www.lovebonito.com", "industry": "Apparel & Fashion", "niche": "women's fashion & direct-to-consumer apparel"},
+            {"name": "Charles & Keith", "website": "https://www.charleskeith.com", "industry": "Apparel & Fashion", "niche": "contemporary footwear, bags & fashion accessories"},
+        ],
+        "real_estate": [
+            {"name": "PropertyGuru", "website": "https://www.propertyguru.com.sg", "industry": "Real Estate", "niche": "proptech company & property marketplace"},
+            {"name": "CapitaLand", "website": "https://www.capitaland.com", "industry": "Real Estate", "niche": "real estate investment & property development"},
+        ],
+        "telecom": [
+            {"name": "Singtel", "website": "https://www.singtel.com", "industry": "Telecommunications", "niche": "global communications technology & 5G telecom"},
+        ],
+    },
+}
+
+
+def _detect_education_tier(*parts: object) -> str:
+    """Classifies education client/rival into: university | school | college | academy | general."""
+    blob = " " + _context_blob(*parts).lower() + " "
+    if not blob.strip():
+        return "general"
+
+    # 1. School markers (check first if not explicitly a university)
+    if re.search(
+        r"\b(school|schools|grammar school|high school|primary school|elementary school|middle school|preschool|kindergarten|k-?12|o\s*levels?|matric|beaconhouse|the city school|city school|roots|lgs|lahore grammar|karachi grammar|kgs|froebel|learning alliance|the educators|sicas|bloomfield|gems education|nord anglia|taaleem|choueifat|eton college|exeter)\b",
+        blob,
+    ):
+        if not re.search(
+            r"\b(university|universities|degree awarding|bachelor|master\b|master'\''s|phd|undergraduate|postgraduate|lums|nust|fast nuces|giki|iba karachi|aku|comsats|szabist|uet|itu|pu\.edu|qau|harvard|mit|stanford|university of oxford|university of cambridge|kaust|kfupm)\b",
+            blob,
+        ):
+            return "school"
+
+    # 2. University / Higher Education markers
+    if re.search(
+        r"\b(university|universities|higher ed|higher education|degree awarding|bachelor|master\b|master'\''s|phd|undergraduate|postgraduate|lums|nust|fast nuces|giki|iba karachi|aku|szabist|comsats|pu\.edu|qau|itu|uet|harvard|mit|stanford|oxford university|cambridge university|university of cambridge|university of oxford|kaust|kfupm|aus\.edu|nyuad|fccollege|lahore school of economics)\b",
+        blob,
+    ):
+        return "university"
+
+    # 3. Intermediate / Pre-university College
+    if re.search(
+        r"\b(intermediate college|junior college|punjab college|pgc|superior college|concordia college|fsc|ics|higher secondary)\b",
+        blob,
+    ):
+        return "college"
+
+    # 4. Test Prep / Coaching Academy / Edtech
+    if re.search(
+        r"\b(test prep|entry test|mdcat|ecat|sat prep|ielts|coaching center|tuition academy|kips academy|step prep|maqsad|noon academy|nearpeer)\b",
+        blob,
+    ):
+        return "academy"
+
+    if re.search(r"\b(school|schools)\b", blob):
+        return "school"
+    if re.search(r"\b(college|colleges)\b", blob):
+        return "college"
+    if re.search(r"\b(academy|academies)\b", blob):
+        return "academy"
+
+    return "general"
+
+
+def _education_tier_compatible(client_tier: str, rival_tier: str) -> bool:
+    """Strictly prevents Universities matching Schools, Schools matching Universities, etc."""
+    if not client_tier or not rival_tier or client_tier == "general" or rival_tier == "general":
+        return True
+    if client_tier == rival_tier:
+        return True
+    # University and School are strictly incompatible
+    if client_tier == "university" and rival_tier in {"school", "academy", "college"}:
+        return False
+    if client_tier == "school" and rival_tier in {"university", "academy", "college"}:
+        return False
+    if client_tier == "college" and rival_tier in {"school", "university", "academy"}:
+        return False
+    if client_tier == "academy" and rival_tier in {"school", "university", "college"}:
+        return False
+    return client_tier == rival_tier
+
+
+def _detect_industry_category(*parts: object) -> str:
+    blob = " " + _context_blob(*parts).lower() + " "
+    if not blob.strip():
+        return "other"
+    # 1. Hospitality & Hotels (check before food so hotel dining is classified under hospitality)
+    if re.search(r"\b(hotels?|resorts?|hospitality|luxury\s+hotel|marriott|hilton|hyatt|jumeirah|serena\s+hotel|hotel\s+suites|motels?)\b", blob):
+        return "hospitality"
+    # 2. Beauty & Wellness
+    if _looks_like_beauty_client(blob) or re.search(r"\b(beauty|salon|salons|parlour|parlor|spa|bridal|makeup|skincare|haircare|hair\s+styling|cosmetics?|aesthetic\s+clinic)\b", blob):
+        return "beauty"
+    # 3. Health & Fitness / Gyms
+    if re.search(r"\b(gyms?|fitness|workout|crossfit|wellness|bodybuilding|personal\s+training|puregym|equinox|planet\s+fitness)\b", blob):
+        return "fitness"
+    # 4. Energy & Solar
+    if re.search(r"\b(solar|cleantech|renewable\s+energy|energy|photovoltaic|inverters?|batteries|green\s+energy|sunrun|tesla\s+solar)\b", blob):
+        return "energy"
+    # 5. Logistics & Supply Chain
+    if re.search(r"\b(logistics|supply\s+chain|courier|freight|shipping|warehousing|cargo|delivery\s+services|tcs|leopards|fedex|ups|dhl|aramex)\b", blob):
+        return "logistics"
+    # 6. Food / Restaurant / Bakery / Cafe
+    if _looks_like_food_client(blob) or re.search(r"\b(fast\s*food|qsr|restaurants?|cafes?|caf[eé]|dining|baker(y|ies|s)?|desserts?|cakes?|pastr(y|ies)|shawarma|burgers?|pizzas?|biryani|eatery|food\s+chain)\b", blob):
+        return "food"
+    # 7. Education / University / School / College / Academy (requires full words, not matching "fast" in "fast food")
+    if re.search(r"\b(schools?|colleges?|universit(y|ies)|education|higher\s+ed|edtech|academ(y|ies)|beaconhouse|lgs|city\s+school|lums|nust|fast\s+nuces|iba\s+karachi|giki|harvard|stanford|cambridge|oxford)\b", blob):
+        edu_tier = _detect_education_tier(blob)
+        if edu_tier in {"university", "school", "college", "academy"}:
+            return edu_tier
+        return "education"
+    # 8. Automotive (whole words only)
+    if re.search(r"\b(cars?|automotive|automobile|dealership|motorcycles?|honda|toyota|suzuki|hyundai|kia|changan|haval|mg\s+motor|carmax|carvana|autonation)\b", blob):
+        return "automotive"
+    # 9. Real Estate
+    if re.search(r"\b(real\s+estate|property|housing|zameen|graana|apartments?|builders?)\b", blob):
+        return "real_estate"
+    # 10. Fintech & Banking
+    if re.search(r"\b(banks?|banking|fintech|wallets?|payments?|easypaisa|jazzcash|nayapay|sadapay|stripe|revolut|paypal)\b", blob):
+        return "fintech"
+    # 11. Telecom
+    if re.search(r"\b(telecom|cellular|broadband|isp|fiber|telenor|zong|ufone|ptcl|nayatel)\b", blob):
+        return "telecom"
+    # 12. Healthcare
+    if re.search(r"\b(hospitals?|clinics?|pharma(cy)?|pharmaceutical|medical|diagnostic|healthcare|chughtai|shaukat\s+khanum)\b", blob):
+        return "healthcare"
+    # 13. Software / IT / SaaS / Data / BI / AI
+    if _looks_like_software_peer_client(blob) or re.search(r"\b(software|saas|it\s+services|digital\s+agency|business\s+intelligence|data\s+analytics|it\s+consulting|artificial\s+intelligence|machine\s+learning|data\s+science|enterprise\s+ai|analytics)\b", blob):
+        return "software"
+    # 14. Retail & E-Commerce
+    if re.search(r"\b(e-?commerce|retail|apparels?|fashions?|clothings?|shopping|daraz|khaadi|sapphire|flipkart|amazon)\b", blob):
+        return "retail"
+    return "other"
+
+
+def _seed_local_industry_rivals(
+    industry: str,
+    market: str,
+    client_name: str,
+    *,
+    already_have: list[str] | None = None,
+    client_website: str | None = None,
+    client_niche: str | None = None,
+    limit: int = 8,
+) -> list[dict]:
+    key = _normalize_country_key(market)
+    country_catalog = _LOCAL_MULTI_INDUSTRY_SEEDS.get(key) or {}
+    cat = _detect_industry_category(industry, client_name, client_niche or "", client_website or "")
+    seeds = (
+        country_catalog.get(cat)
+        or country_catalog.get("education" if cat in {"university", "school", "college", "academy"} else "")
+        or []
+    )
+    if not seeds:
+        return []
+    blocked = _blocked_rival_keys(already_have, client_name, websites=[client_website] if client_website else None)
+    client_host = _domain_of(client_website or "")
+
+    out: list[dict] = []
+    for seed in seeds:
+        name = _as_str(seed.get("name")).strip()
+        website = _normalize_website(_as_str(seed.get("website")) or None)
+        if not name or not website:
+            continue
+        seed_keys = _rival_keys(name, website)
+        if seed_keys & blocked:
+            continue
+        if client_host and _domain_of(website) == client_host:
+            continue
+        if _is_self_rival(client_name, name, website=website, client_website=client_website):
+            continue
+        niche_text = _as_str(seed.get("niche")) or cat.replace("_", " ")
+        ind_label = _as_str(seed.get("industry")) or industry or cat.title()
+        out.append(
+            {
+                "name": name,
+                "website": website,
+                "industry": ind_label,
+                "business_model": "product" if cat in {"automotive", "retail"} else "services",
+                "headquarters_country": key.title() if key else market,
+                "why_relevant": f"Leading peer {cat.replace('_', ' ')} brand in {market} ({niche_text}); direct market competitor.",
+                "threat_level": "high",
+                "overlap_score": 85.0,
+                "same_niche": True,
+                "same_market": True,
+                "source": "seed",
+            }
+        )
+        blocked |= seed_keys
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _seed_global_industry_rivals(
+    industry: str,
+    client_name: str,
+    *,
+    already_have: list[str] | None = None,
+    client_website: str | None = None,
+    client_niche: str | None = None,
+    client_market: str = "",
+    limit: int = 8,
+) -> list[dict]:
+    """Provides high-quality international competitors from US/UK/global catalogs when scope is global."""
+    cat = _detect_industry_category(industry, client_name, client_niche or "", client_website or "")
+    home_key = _normalize_country_key(client_market)
+
+    seeds: list[tuple[str, dict]] = []
+
+    # 1. Food clients: pull from US, UK, UAE food catalogs
+    if cat == "food" or _looks_like_food_client(client_name, client_niche, industry):
+        client_fmt = _food_format_from_blob(client_niche, industry, client_name)
+        for g_key in ("united states", "united kingdom", "uae", "canada", "australia", "saudi arabia"):
+            if home_key and g_key == home_key:
+                continue
+            cat_food_seeds = list(_LOCAL_QSR_SEEDS.get(g_key, []))
+            if client_fmt and client_fmt != _FOOD_FORMAT_GENERAL:
+                cat_food_seeds = [s for s in cat_food_seeds if _food_format_compatible(client_fmt, s.get("format", ""))]
+            for s in cat_food_seeds:
+                seeds.append((g_key, s))
+
+    # 2. Beauty clients: pull from US, UK, UAE beauty catalogs
+    elif cat == "beauty" or _looks_like_beauty_client(client_name, client_niche, industry):
+        for g_key in ("united states", "united kingdom", "uae"):
+            if home_key and g_key == home_key:
+                continue
+            for s in _LOCAL_BEAUTY_SEEDS.get(g_key, []):
+                seeds.append((g_key, s))
+
+    # 3. Software clients: pull from global SaaS & international software catalogs
+    elif cat == "software" or _looks_like_software_peer_client(client_name, client_niche, industry):
+        for s in _GLOBAL_SOFTWARE_SEEDS:
+            seeds.append(("global", s))
+        for g_key in ("united states", "united kingdom", "canada", "germany", "singapore", "australia"):
+            for s in _LOCAL_SOFTWARE_SEEDS.get(g_key, []):
+                seeds.append((g_key, s))
+
+    # 4. Education, Automotive, Retail, Fintech, Healthcare, Real Estate: pull from multi-industry catalogs
+    else:
+        global_sources = ["united states", "united kingdom", "canada", "australia", "germany", "singapore", "uae", "saudi arabia"]
+        for g_key in global_sources:
+            if home_key and g_key == home_key:
+                continue
+            country_catalog = _LOCAL_MULTI_INDUSTRY_SEEDS.get(g_key) or {}
+            cat_seeds = (
+                country_catalog.get(cat)
+                or country_catalog.get("education" if cat in {"university", "school", "college", "academy"} else "")
+                or []
+            )
+            for s in cat_seeds:
+                seeds.append((g_key, s))
+
+    if not seeds:
+        return []
+
+    blocked = _blocked_rival_keys(already_have, client_name, websites=[client_website] if client_website else None)
+    client_host = _domain_of(client_website or "")
+
+    out: list[dict] = []
+    for g_key, seed in seeds:
+        name = _as_str(seed.get("name")).strip()
+        website = _normalize_website(_as_str(seed.get("website")) or None)
+        if not name or not website:
+            continue
+        seed_keys = _rival_keys(name, website)
+        if seed_keys & blocked:
+            continue
+        if client_host and _domain_of(website) == client_host:
+            continue
+        if _is_self_rival(client_name, name, website=website, client_website=client_website):
+            continue
+        niche_text = _as_str(seed.get("niche")) or cat.replace("_", " ")
+        ind_label = _as_str(seed.get("industry")) or industry or cat.title()
+        country_name = "United States" if g_key == "united states" else ("United Kingdom" if g_key == "united kingdom" else ("UAE" if g_key == "uae" else g_key.title()))
+        out.append(
+            {
+                "name": name,
+                "website": website,
+                "industry": ind_label,
+                "business_model": "product" if cat in {"automotive", "retail"} else "services",
+                "headquarters_country": country_name,
+                "why_relevant": f"Leading global / international {cat.replace('_', ' ')} benchmark in {country_name} ({niche_text}); direct international peer.",
+                "threat_level": "high",
+                "overlap_score": 85.0,
+                "same_niche": True,
+                "same_market": False,
+                "source": "seed",
+            }
+        )
+        blocked |= seed_keys
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _seed_local_beauty_rivals(
+    market: str,
+    client_name: str,
+    *,
+    already_have: list[str] | None = None,
+    client_website: str | None = None,
+    client_niche: str = "",
+    client_industry: str = "",
+    limit: int = 8,
+) -> list[dict]:
+    key = _normalize_country_key(market)
+    seeds = list(_LOCAL_BEAUTY_SEEDS.get(key) or [])
+    if not seeds:
+        return []
+    blocked = _blocked_rival_keys(already_have, client_name, websites=[client_website] if client_website else None)
+    client_host = _domain_of(client_website or "")
+
+    out: list[dict] = []
+    for seed in seeds:
+        name = _as_str(seed.get("name")).strip()
+        website = _normalize_website(_as_str(seed.get("website")) or None)
+        if not name or not website:
+            continue
+        seed_keys = _rival_keys(name, website)
+        if seed_keys & blocked:
+            continue
+        if client_host and _domain_of(website) == client_host:
+            continue
+        if _is_self_rival(client_name, name, website=website, client_website=client_website):
+            continue
+        niche_text = _as_str(seed.get("niche")) or "beauty salon & personal care"
+        out.append(
+            {
+                "name": name,
+                "website": website,
+                "industry": "Beauty & Personal Care",
+                "business_model": "services",
+                "headquarters_country": key.title() if key else market,
+                "why_relevant": f"Leading peer beauty & personal care brand in {market} ({niche_text}); competes for similar clients as {client_name}.",
+                "threat_level": "high",
+                "overlap_score": 78.0,
+                "same_niche": True,
+                "same_market": True,
+                "source": "seed",
+            }
+        )
+        blocked |= seed_keys
+        if len(out) >= limit:
+            break
+    return out
 
 
 def _seed_local_software_rivals(
@@ -2329,7 +3737,7 @@ def _seed_local_qsr_rivals(
         if (
             tier == _FOOD_TIER_LOCAL
             and rival_tier == _FOOD_TIER_NATIONAL
-            and len(out) >= max(3, limit)
+            and len(out) >= limit
         ):
             continue
         seed_keys = _rival_keys(name, website)
@@ -2388,7 +3796,8 @@ def _is_curated_seed_rival(name: str, market: str | None = None, *, kind: str | 
     market_key = _normalize_country_key(market or "")
     software_ok = kind == "software"
     food_ok = kind == "food"
-    if software_ok:
+    beauty_ok = kind == "beauty"
+    if software_ok or kind is None:
         for seed in _GLOBAL_SOFTWARE_SEEDS:
             if _as_str(seed.get("name")).lower() == key:
                 return True
@@ -2398,10 +3807,24 @@ def _is_curated_seed_rival(name: str, market: str | None = None, *, kind: str | 
             for seed in seeds:
                 if _as_str(seed.get("name")).lower() == key:
                     return True
-    if food_ok:
+    if food_ok or kind is None:
         for country_key, seeds in _LOCAL_QSR_SEEDS.items():
             if market_key and country_key != market_key:
                 continue
+            for seed in seeds:
+                if _as_str(seed.get("name")).lower() == key:
+                    return True
+    if beauty_ok or kind is None:
+        for country_key, seeds in _LOCAL_BEAUTY_SEEDS.items():
+            if market_key and country_key != market_key:
+                continue
+            for seed in seeds:
+                if _as_str(seed.get("name")).lower() == key:
+                    return True
+    for country_key, cat_dict in _LOCAL_MULTI_INDUSTRY_SEEDS.items():
+        if market_key and country_key != market_key:
+            continue
+        for cat, seeds in cat_dict.items():
             for seed in seeds:
                 if _as_str(seed.get("name")).lower() == key:
                     return True
@@ -2439,11 +3862,15 @@ def _incompatible_peer(
     rival_family = _model_family(rival_model)
     client_l = f"{client_name} {client_model} {client_industry} {client_niche}".lower()
     rival_l = f"{rival_model} {rival_industry} {rival_blob}".lower()
-    client_is_b2b = client_family in {"b2b_services", "b2b_software"} or any(
-        tok in client_l for tok in _B2B_PEER_MODELS
-    ) or any(
-        tok in client_l
-        for tok in ("ai", "software", "saas", "agency", "data", "analytics", "intelligence", "automation", "technology")
+
+    client_cat = _detect_industry_category(client_l)
+    rival_cat = _detect_industry_category(rival_l)
+
+    client_is_consumer = _looks_like_food_client(client_l) or _looks_like_beauty_client(client_l) or client_cat in {"retail", "food", "beauty"}
+    client_is_b2b = (not client_is_consumer) and (
+        client_cat == "software"
+        or _looks_like_software_peer_client(client_l)
+        or client_family in {"b2b_services", "b2b_software"}
     )
 
     client_verticals = _detect_verticals(client_l)
@@ -2452,31 +3879,83 @@ def _incompatible_peer(
         client_verticals.add("food_qsr")
     if _looks_like_food_client(rival_l):
         rival_verticals.add("food_qsr")
-    # Strong alternate verticals that should not match a generic "Technology" / AI / agency client
-    hard_verticals = {
-        "fintech", "retail", "manufacturing", "telecom", "healthcare",
-        "edtech", "logistics", "real_estate", "government", "talent_marketplace",
-        "food_qsr",
-    }
-    peer_verticals = {"data_ai", "software_services", "cybersecurity"}
-
-    if rival_verticals & hard_verticals:
-        # Client must share that vertical (or explicitly be in it)
-        if not (client_verticals & rival_verticals & hard_verticals):
-            # Exception: only if client is also tagged with that vertical in industry/niche
-            return True
+    if _looks_like_beauty_client(client_l):
+        client_verticals.add("beauty_personal_care")
+    if _looks_like_beauty_client(rival_l):
+        rival_verticals.add("beauty_personal_care")
 
     client_is_food = _looks_like_food_client(client_l) or "food_qsr" in client_verticals
     rival_is_food = _looks_like_food_client(rival_l) or "food_qsr" in rival_verticals
+    client_is_beauty = _looks_like_beauty_client(client_l) or "beauty_personal_care" in client_verticals
+    rival_is_beauty = _looks_like_beauty_client(rival_l) or "beauty_personal_care" in rival_verticals
+
+    # News / blogs / media portals / rankings / publishers are NEVER competitors for education, software, food, beauty, retail, etc.
+    if any(
+        m in rival_l for m in (
+            "news website", "news portal", "information portal", "news and information",
+            "media company", "news publisher", "online magazine", "blog post", "article portal",
+            "not an educational institution", "not a university", "not a school", "not a direct competitor",
+            "does not compete for students", "does not compete for diners", "does not compete for clients",
+            "regional studies", "regionalstudies", "research journal", "news article", "journal publication"
+        )
+    ):
+        return True
+
+    # Education sub-tier check (University vs School vs College vs Academy)
+    client_is_edu = client_cat in {"education", "university", "school", "college", "academy"} or any(
+        t in client_l for t in ("education", "school", "university", "college", "academy", "higher ed", "k-12", "k12")
+    )
+    rival_is_edu = rival_cat in {"education", "university", "school", "college", "academy"} or any(
+        t in rival_l for t in ("education", "school", "university", "college", "academy", "higher ed", "k-12", "k12")
+    )
+    if client_is_edu and rival_is_edu:
+        c_tier = _detect_education_tier(client_l)
+        r_tier = _detect_education_tier(rival_l)
+        if not _education_tier_compatible(c_tier, r_tier):
+            return True
+        return False
+
+    # Food sub-format check (Bakery vs Burger vs Pizza vs Shawarma vs Cafe vs Asian vs Dining)
+    if client_is_food and rival_is_food:
+        c_fmt = _food_format_from_blob(client_l)
+        r_fmt = _food_format_from_blob(rival_l)
+        if c_fmt and c_fmt != _FOOD_FORMAT_GENERAL and r_fmt and r_fmt != _FOOD_FORMAT_GENERAL:
+            if not _food_format_compatible(c_fmt, r_fmt):
+                return True
+
+    # Peer verticals and strong alternate verticals
+    hard_verticals = {
+        "fintech", "retail", "manufacturing", "telecom", "healthcare",
+        "edtech", "logistics", "real_estate", "government", "talent_marketplace",
+        "food_qsr", "beauty_personal_care", "automotive",
+    }
+    peer_verticals = {"data_ai", "software_services", "cybersecurity"}
+
     client_is_software = _looks_like_software_peer_client(client_l) or bool(client_verticals & peer_verticals)
     rival_is_software = _looks_like_software_peer_client(rival_l) or "software_services" in rival_verticals
+
+    # Cross-vertical clashes
+    if client_is_beauty and rival_is_beauty:
+        return False
+    if client_is_beauty and (rival_is_food or rival_is_software or "fintech" in rival_verticals):
+        return True
+    if (client_is_food or client_is_b2b or client_is_software) and rival_is_beauty:
+        return True
+
+    if rival_verticals & hard_verticals:
+        # Client must share that vertical (or explicitly be in it)
+        shared_hard = client_verticals & rival_verticals & hard_verticals
+        if not shared_hard and client_cat != rival_cat:
+            if client_verticals or client_is_food or client_is_b2b or client_is_beauty:
+                return True
+
     if client_is_food and rival_is_software:
         return True
     if client_is_software and rival_is_food:
         return True
     if client_is_food and _looks_like_fmcg_or_snack_brand(rival_l):
         return True
-    if "software_services" in rival_verticals and not client_is_software:
+    if rival_is_software and not client_is_software:
         return True
 
     # Software houses / digital agencies are not peers of talent marketplaces (Andela/Turing/Toptal)
@@ -2499,7 +3978,7 @@ def _incompatible_peer(
     ):
         return True
 
-    if client_is_b2b:
+    if client_is_b2b and client_is_software:
         kind = _looks_like_retail_or_media(rival_blob)
         if kind in {"retail", "media"}:
             return True
@@ -2591,7 +4070,8 @@ def _niche_competitor_queries(
     niche_l = niche.lower()
     food_blob = f"{client.name} {niche} {_as_str(client.industry)} {model}"
     is_global = str(scope).lower() == "global"
-    # Never bake a local country into global Serp queries
+    clean_name = re.sub(r"\b(lahore|karachi|islamabad|rawalpindi|peshawar|multan|faisalabad|pakistan|dubai|riyadh|london|uk|usa)\b", "", client.name, flags=re.I).strip()
+    clean_name = re.sub(r"\s+", " ", clean_name) or client.name
     geo = "" if is_global else _as_str(market).strip()
     queries: list[str] = []
 
@@ -2678,13 +4158,35 @@ def _niche_competitor_queries(
                     f"popular local {format_q} {geo}".strip(),
                 ]
             )
+    # Beauty / salon / aesthetics
+    elif _looks_like_beauty_client(client.name, niche, client.industry, model):
+        if is_global:
+            queries = [
+                f"top beauty brands like {client.name} worldwide",
+                f"international cosmetics and salon competitors {client.name}",
+                f"beauty salon chains similar to {client.name} global",
+            ]
+        elif geo:
+            queries = [
+                f"top beauty salons in {geo}",
+                f"best makeup studio salon {geo}",
+                f"bridal salon aesthetic clinic {geo}",
+                f"{client.name} competitors beauty salon {geo}",
+                f"beauty parlour brands in {geo}",
+            ]
+        else:
+            queries = [
+                f"beauty salons like {client.name}",
+                f"makeup studios competitors {client.name}",
+            ]
     # Software-house / IT services — only when client is actually software
     elif _looks_like_software_peer_client(client.name, niche, client.industry, model):
         if is_global:
             queries = [
-                f"global software development companies like {client.name}",
-                f"international IT services firms competitors {client.name}",
-                f"digital product companies similar to {client.name} worldwide",
+                "top global custom software development companies",
+                "leading international IT services and digital engineering firms",
+                f"digital product companies similar to {clean_name} worldwide",
+                f"global software development companies like {clean_name}",
             ]
         elif geo:
             queries = [
@@ -2699,12 +4201,86 @@ def _niche_competitor_queries(
                 f"software development companies like {client.name}",
                 f"digital agencies competitors {client.name}",
             ]
+    # Education: University vs School vs College vs Academy
+    elif _detect_industry_category(client.name, niche, client.industry, model) in {"education", "university", "school", "college", "academy"}:
+        edu_tier = _detect_education_tier(client.name, niche, client.industry, client.notes, client.tagline)
+        if edu_tier == "university":
+            if is_global:
+                queries = [
+                    "top international universities worldwide research higher education",
+                    f"leading universities worldwide competitors {clean_name}",
+                    "top global research universities worldwide",
+                    "best international universities higher education US UK Europe",
+                ]
+            elif geo:
+                queries = [
+                    f"top universities in {geo}",
+                    f"best higher education degree awarding universities {geo}",
+                    f"{client.name} university competitors {geo}",
+                    f"leading universities in {geo} bachelor master",
+                    f"higher education institutions in {geo}",
+                ]
+            else:
+                queries = [
+                    f"universities like {client.name}",
+                    f"higher education university competitors {client.name}",
+                ]
+        elif edu_tier == "school":
+            if is_global:
+                queries = [
+                    "top international k-12 school systems worldwide",
+                    "leading global private schools networks international",
+                    f"international school systems similar to {clean_name}",
+                ]
+            elif geo:
+                queries = [
+                    f"top private schools in {geo}",
+                    f"best school systems in {geo} k-12",
+                    f"{client.name} school competitors {geo}",
+                    f"leading grammar and high schools in {geo}",
+                    f"cambridge o level a level schools in {geo}",
+                ]
+            else:
+                queries = [
+                    f"schools like {client.name}",
+                    f"school system competitors {client.name}",
+                ]
+        elif edu_tier == "college":
+            if is_global:
+                queries = [
+                    "leading international intermediate and pre-university colleges worldwide",
+                ]
+            elif geo:
+                queries = [
+                    f"top intermediate colleges in {geo}",
+                    f"best colleges in {geo} fsc ics a levels",
+                    f"{client.name} college competitors {geo}",
+                ]
+            else:
+                queries = [
+                    f"colleges like {client.name}",
+                ]
+        else:
+            if is_global:
+                queries = [
+                    "leading international test preparation and online learning platforms",
+                ]
+            elif geo:
+                queries = [
+                    f"top entry test preparation academies in {geo}",
+                    f"coaching centers in {geo} mdcat ecat",
+                    f"{client.name} academy competitors {geo}",
+                ]
+            else:
+                queries = [
+                    f"test prep academies like {client.name}",
+                ]
     else:
         if is_global:
             queries = [
-                f"{client.name} competitors {niche} worldwide",
-                f"global companies like {client.name} {niche}",
-                f"international {niche} brands similar to {client.name}",
+                f"top international {niche} companies worldwide",
+                f"global companies like {clean_name} {niche}",
+                f"international {niche} brands competitors",
             ]
         else:
             queries = [
@@ -2732,8 +4308,11 @@ def _niche_competitor_queries(
 
 
 _SERP_NOISE_DOMAINS = {
+    # Freelancing & Gig Platforms (NOT B2B Software / Agency Peers)
+    "upwork.com", "fiverr.com", "freelancer.com", "toptal.com", "guru.com", "peopleperhour.com",
+    "bebee.com", "tracxn.com",
     # Software & SaaS review / directory aggregators
-    "g2.com", "capterra.com", "getapp.com", "softwareadvice.com", "trustradius.com",
+    "g2.com", "capterra.com", "capterra.ae", "capterra.co.uk", "getapp.com", "softwareadvice.com", "trustradius.com",
     "crozdesk.com", "saashub.com", "alternativeto.net", "slashdot.org", "producthunt.com",
     "clutch.co", "goodfirms.co", "sortlist.com", "designrush.com", "upcity.com",
     "techbehemoths.com", "themanifest.com", "topdevelopers.co", "appfutura.com",
@@ -2761,13 +4340,29 @@ _SERP_NOISE_DOMAINS = {
     "dawnfoods.com", "google.com", "photos.google.com", "drive.google.com",
     "docs.google.com", "notion.site", "gitbook.io", "wikipedia.org", "wikihow.com",
     "github.com", "gitlab.com", "bitbucket.org", "sourceforge.net",
+    # Education ranking aggregators and directories
+    "timeshighereducation.com", "topuniversities.com", "usnews.com", "shanghairanking.com",
+    "edurank.org", "4icu.org", "unirank.org", "unirank.com", "studyportals.com", "bachelorsportal.com",
+    "mastersportal.com", "phdportal.com", "universitiesrankings.com", "cwur.org", "worldresearchranking.com",
+    "webometrics.info",
+    # Market research report aggregators and PR wire sites
+    "ibisworld.com", "idc.com", "my.idc.com", "gartner.com", "forrester.com",
+    "imarcgroup.com", "mordorintelligence.com", "grandviewresearch.com", "expertmarketresearch.com",
+    "alliedmarketresearch.com", "fortunebusinessinsights.com", "verifiedmarketresearch.com",
+    "marketsandmarkets.com", "statista.com", "globenewswire.com", "prnewswire.com", "businesswire.com",
+    "custommarketinsights.com", "thebrainyinsights.com", "coherentmarketinsights.com",
+    "kyubit.com", "perceptive-analytics.com", "nsktglobal.com", "inzinc.ae", "urcapk.com", "karachidotai.com",
+    # Regional / national news and blog portals
+    "regionalstudies.com.pk", "regionalstudies.org", "pakistantoday.com.pk", "dailytimes.com.pk",
+    "brecorder.com", "dailypakistan.com.pk", "nation.com.pk", "pakobserver.net",
 }
 
 # Host markers (substring) for content / grocery sites mistaken as rivals
 _CONTENT_OR_CPG_HOST_MARKERS = (
     "travelblog", "foodblog", "blog", "magazine", "recipes", "photos",
     "bread", "bakerywholesale", "flour", "grocery", "review", "directory",
-    "news", "press", "media", "portal", "wiki",
+    "news", "press", "media", "portal", "wiki", "regionalstudies", "studies",
+    "imarcgroup", "mordorintelligence", "grandviewresearch", "marketresearch",
 )
 _CPG_PATH_MARKERS = ("/product/", "/products/", "/shop/", "/sku/")
 _DIRECTORY_OR_LISTICLE_PATH_MARKERS = (
@@ -2777,27 +4372,29 @@ _DIRECTORY_OR_LISTICLE_PATH_MARKERS = (
     "/story/", "/stories/", "/review/", "/reviews/", "/vs/", "/compare/",
     "/comparison/", "/list/", "/lists/", "/guides/", "/guide/", "/insights/",
     "/trends/", "/category/", "/tag/", "/author/", "/feed/", "/press-release/",
-    "/how-to-", "/tutorials/", "/case-studies/", "/ranking/",
+    "/how-to-", "/tutorials/", "/case-studies/", "/ranking/", "/rankings/",
+    "/market-report/", "/market-research/", "/report/", "/reports/", "-market",
+    "-market-size", "-market-share", "-industry-analysis", "-growth-trends",
 )
 _CITY_IN_TITLE_RE = re.compile(
-    r"\b(food|shawarma|pizza|burger|biryani|cafe|restaurant|software|agency|company|firm|solutions)s?\s+in\s+"
-    r"(islamabad|lahore|karachi|rawalpindi|peshawar|multan|faisalabad|pakistan|"
-    r"dubai|riyadh|london|toronto|new york|california|texas|singapore|berlin)\b",
+    r"\b(in|near)\s+(lahore|karachi|islamabad|rawalpindi|peshawar|multan|faisalabad|pakistan|dubai|riyadh|london|uk|usa)\b",
     re.I,
 )
-
 _BLOG_OR_ARTICLE_TITLE_PATTERNS = re.compile(
-    r"^(top\s+\d+|\d+\s+best|\d+\s+top|how\s+to|why\s+you|what\s+is|the\s+best|the\s+top|"
-    r"ultimate\s+guide|complete\s+guide|best\s+alternatives|top\s+alternatives|"
-    r"list\s+of\s+top|list\s+of\s+best|best\s+companies\s+in|top\s+agencies\s+in|"
-    r".*\s+(vs|versus|compared\s+to|alternative\s+to|review\s+and\s+pricing|reviews\s+and\s+pricing))\b",
-    re.IGNORECASE,
+    r"(\btop\s+\d+\b|\bbest\s+\d+\b|\b\d+\s+(top|best|leading)\b|"
+    r"\b(top|best|leading|\d+)\s+(pakistani\s+)?(universities|schools|colleges|companies|places|restaurants|cafes|software|softwares|tools|agencies)\b|"
+    r"\b(included\s+in|featured?\s+in|rankings?|review|reviews|guide|how\s+to|complete\s+guide|versus|comparison)\b)",
+    re.I,
 )
 
 
 def _is_serp_noise_domain(url: str) -> bool:
     host = _domain_of(url)
     if not host:
+        return False
+    if any(k in host for k in ("regionalstudies", "pakistantoday", "dailytimes", "pakobserver", "hec.gov", "punjab.gov", "mofept.gov")):
+        return True
+    if ".gov." in host or host.endswith(".gov") or host.endswith(".gov.pk") or host.endswith(".gov.ae") or host.endswith(".gov.uk"):
         return True
     for blocked in _SERP_NOISE_DOMAINS:
         if host == blocked or host.endswith("." + blocked):
@@ -2814,10 +4411,17 @@ def _is_blog_or_article_url(url: str, title: str = "") -> bool:
     try:
         from urllib.parse import urlparse
         parsed = urlparse(url if "://" in url else f"https://{url}")
+        host = (parsed.hostname or "").lower()
         path = (parsed.path or "").lower()
         if any(p in path for p in _DIRECTORY_OR_LISTICLE_PATH_MARKERS):
             return True
         if re.search(r"/\d{4}/\d{2}/", path) or re.search(r"/(how-to|best|top|guide)-", path):
+            return True
+        # Slug with multiple words / hyphens (e.g. /33-pakistani-universities-included-in-...)
+        if path.count("-") >= 3 or re.search(r"/\d+-[a-z0-9-]+", path):
+            return True
+        # News / blog host markers
+        if any(k in host for k in ("regionalstudies", "pakistantoday", "dailytimes", "tribune", "dawn", "brecorder", "thenews", "dailypakistan", "propakistani")):
             return True
     except Exception:
         pass
@@ -3030,7 +4634,7 @@ def _filter_niche_competitors(
         # Invented AI rivals often ship a website that doesn't match the brand
         alignment_ok = (
             (not website)
-            or _as_str(item.get("source")).lower() in {"serp", "seed"}
+            or _as_str(item.get("source")).lower() in {"serp", "seed", "ai", "ai_same_tier", ""}
             or _name_aligned_with_domain(name, website)
         )
         # Name↔domain alignment alone is NOT proof — "Pizza 5" + pizza5.pk is still fake
@@ -3103,7 +4707,7 @@ def _filter_niche_competitors(
 
         # Local scope: hard-reject clear foreign-country rivals (e.g. India/Singapore when market=Pakistan)
         if require_local_market and market_l:
-            if _mentions_conflicting_country(blob, website, market_l):
+            if _mentions_conflicting_country(blob, website, market_l, client_name=client_name):
                 continue
             hq_key = _normalize_country_key(hq_country)
             market_key = _normalize_country_key(market_l)
@@ -3116,7 +4720,7 @@ def _filter_niche_competitors(
             )
             if not has_local_signal:
                 src = _as_str(item.get("source")).lower()
-                if src in {"serp", "ai_same_tier", "ai"}:
+                if src in {"serp", "ai_same_tier", "ai", ""}:
                     # Targeted local prompts / SERP are geo-scoped
                     has_local_signal = True
                     score -= 4
@@ -3151,14 +4755,13 @@ def _filter_niche_competitors(
                 score += 16
             elif require_local_market:
                 src = _as_str(item.get("source")).lower()
-                if src == "serp":
-                    # Organic results are already geo-biased via Serp gl/location —
-                    # don't nuke them when the snippet omits the country name.
+                if src in {"serp", "ai", "ai_same_tier", ""}:
+                    # Organic results & targeted AI local runs are already geo-scoped
                     score -= 6
                 elif src == "seed":
                     score += 4
                 else:
-                    score -= 30
+                    score -= 20
 
         # Local runs need a usable website when one is claimed
         if require_local_market and _as_str(item.get("website")) and not website:
@@ -3236,7 +4839,20 @@ def _competitors_from_serp(organic: list[dict], client_name: str) -> list[dict]:
             continue
         if _is_serp_noise_domain(link) or _is_blog_or_article_url(link, title):
             continue
-        name = title.split("|")[0].split("-")[0].split("–")[0].strip()
+        # Strip leading/trailing navigational noise: "About Us - Brand Name" -> "Brand Name"
+        title_clean = re.sub(
+            r"^(about\s*(us)?|contact\s*(us)?|home(page)?|our\s*story|who\s*we\s*are|menu|our\s*menu|locations|outlets|branches|careers|jobs|reviews|customer\s*reviews|faq|faqs|login|sign\s*in|order\s*online)\s*[-|–—:]\s*",
+            "",
+            title,
+            flags=re.I,
+        ).strip()
+        title_clean = re.sub(
+            r"\s*[-|–—:]\s*(about\s*(us)?|contact\s*(us)?|home(page)?|our\s*story|who\s*we\s*are|menu|our\s*menu|locations|outlets|branches|careers|jobs|reviews|customer\s*reviews|faq|faqs|login|sign\s*in|order\s*online)$",
+            "",
+            title_clean,
+            flags=re.I,
+        ).strip()
+        name = title_clean.split("|")[0].split("-")[0].split("–")[0].strip()
         # Drop marketing suffixes: "Eastern Oven Your Go-To Pizza Haven..."
         name = re.split(
             r"\s+[–—|:]\s+|\s+-\s+(menu|order|delivery|reviews?)\b",
@@ -3258,8 +4874,15 @@ def _competitors_from_serp(organic: list[dict], client_name: str) -> list[dict]:
             flags=re.I,
         ).strip()
         name = _clean_rival_display_name(name)
-        # If title is still a category phrase or article phrase, prefer the domain brand
-        if _is_generic_or_fake_rival_name(name) or len(name) > 55 or _is_blog_or_article_url(link, name):
+        # If title is an e-commerce action / SEO query phrase, prefer the domain brand
+        if (
+            re.match(r"^(buy|order|shop|get|send)\s+", name, flags=re.I)
+            or "online in " in name.lower()
+            or "best cakes" in name.lower()
+            or _is_generic_or_fake_rival_name(name)
+            or len(name) > 55
+            or _is_blog_or_article_url(link, name)
+        ):
             host_brand = _brand_guess_from_host(link)
             if host_brand and not _is_generic_or_fake_rival_name(host_brand) and not _is_blog_or_article_url(link, host_brand):
                 name = host_brand
@@ -3329,29 +4952,74 @@ async def _ai_propose_same_tier_peers(
         client.name, client.niche, client.industry, business_model, name=client.name
     )
     is_food = _looks_like_food_client(client.name, client.niche, client.industry, business_model)
+    is_beauty = _looks_like_beauty_client(client.name, client.niche, client.industry, business_model)
+    is_sw = _looks_like_software_peer_client(client.name, client.niche, client.industry, business_model)
     focus = _as_str(market_focus).strip() or "the client's primary market"
-    geo_block = (
-        (
-            f"Every rival MUST be headquartered in OR primarily selling in {focus}. "
+    home_market = _market_area_from_client(client) or focus
+    if scope == "global":
+        geo_block = (
+            f"GLOBAL COMPETITORS RULE (hard): When scope is global, every competitor MUST be an established international / global company or institution headquartered OUTSIDE {home_market}. "
+            f"DO NOT return domestic/local competitors from {home_market}. "
+            "Return leading international peers operating in the US, UK, Europe, Australia, Asia, or worldwide."
+        )
+        why_geo_rule = "Every why_relevant must explain how this international peer competes as a global benchmark."
+    else:
+        geo_block = (
+            f"LOCAL COMPETITORS RULE (hard): Every rival MUST be headquartered in OR primarily selling in {focus}. "
             f"headquarters_country must be {focus} (or a city inside it). "
             "Omit any company from another country."
         )
-        if scope == "local"
-        else "Prefer peers with genuine global/international reach in the same niche."
-    )
-    food_or_sw = (
-        "Only real food peers at the SAME scale AND SAME CATEGORY — never software houses. "
-        "CATEGORY RULE (hard): restaurant clients get restaurants only; cafe→cafes; bakery/cake shop→bakeries; "
-        "burger→burger; pizza→pizza; asian→asian. "
-        "Never pair a restaurant with a cake shop (e.g. Meet Me in Paris ≠ Layers Bakeshop). "
-        "Never return furniture/kitchen brands (e.g. Cucina as cabinets/furniture). "
-        "Never return Andiamo (Dubai Hyatt Italian) as a Pakistan local peer. "
-        "Never invent placeholder food brands (Pizza 24, Pizza 5, Pizza 360, Pizza 2 Go, Burger 99) "
-        "or fake matching domains (pizza24.pk). Only well-known REAL operating brands. "
-        "Never invent French placeholder names. Never return Xinyaki (typo) — Ginyaki is oriental, not a French restaurant peer."
-        if is_food
-        else "Only real commercial software houses / digital agencies / IT product peers — never food chains."
-    )
+        why_geo_rule = f"Every why_relevant MUST explicitly mention {focus} (city/country) and how they sell there."
+    if is_food:
+        peer_guidance = (
+            "Only real food peers at the SAME scale AND SAME CATEGORY — never software houses. "
+            "CATEGORY RULE (hard): restaurant clients get restaurants only; cafe→cafes; bakery/cake shop→bakeries; "
+            "burger→burger; pizza→pizza; asian→asian. "
+            "Never pair a restaurant with a cake shop (e.g. Meet Me in Paris ≠ Layers Bakeshop). "
+            "Never return furniture/kitchen brands (e.g. Cucina as cabinets/furniture). "
+            "Never return Andiamo (Dubai Hyatt Italian) as a Pakistan local peer. "
+            "Never invent placeholder food brands (Pizza 24, Pizza 5, Pizza 360, Pizza 2 Go, Burger 99) "
+            "or fake matching domains (pizza24.pk). Only well-known REAL operating brands. "
+            "Never invent French placeholder names. Never return Xinyaki (typo) — Ginyaki is oriental, not a French restaurant peer."
+        )
+    elif is_beauty:
+        peer_guidance = (
+            "Only real beauty salons, makeup studios, aesthetic clinics, and personal care brands in the same category. "
+            "NEVER software houses, IT firms, restaurants, or unrelated retailers. "
+            "Return real established salons and beauty studios with working websites in this market."
+        )
+    elif is_sw:
+        peer_guidance = "Only real commercial software houses / digital agencies / IT product peers — never food chains or unrelated retailers."
+    elif _detect_industry_category(client.name, client.niche, client.industry, business_model) in {"education", "university", "school", "college", "academy"}:
+        edu_tier = _detect_education_tier(client.name, client.niche, client.industry, client.notes, client.tagline)
+        if edu_tier == "university":
+            peer_guidance = (
+                "EDUCATION RULE (hard): Client is a UNIVERSITY / HIGHER EDUCATION INSTITUTION. "
+                "Only real UNIVERSITIES, higher education institutes, and degree-awarding institutions are valid competitors. "
+                "STRICTLY FORBIDDEN: K-12 schools, primary/grammar schools, high schools, kindergartens, tutoring/coaching academies. "
+                "Every competitor MUST be a recognized UNIVERSITY offering bachelor/master degrees."
+            )
+        elif edu_tier == "school":
+            peer_guidance = (
+                "EDUCATION RULE (hard): Client is a K-12 / GRAMMAR / HIGH SCHOOL. "
+                "Only real private/public SCHOOL systems and K-12 institutions are valid competitors. "
+                "STRICTLY FORBIDDEN: Universities, medical colleges, engineering universities, degree-awarding institutes. "
+                "Every competitor MUST be a recognized primary/middle/high SCHOOL system."
+            )
+        elif edu_tier == "college":
+            peer_guidance = (
+                "EDUCATION RULE (hard): Client is an INTERMEDIATE / HIGHER SECONDARY COLLEGE. "
+                "Only real pre-university colleges and intermediate colleges (FSc/FA/ICS/A-Levels) are valid competitors."
+            )
+        else:
+            peer_guidance = (
+                "EDUCATION RULE (hard): Client is a TEST PREP / COACHING ACADEMY or EDTECH platform. "
+                "Only test prep academies, entry test coaching centers, and edtech platforms are valid competitors."
+            )
+    else:
+        ind_lbl = _as_str(client.industry) or "the same industry"
+        nich_lbl = _as_str(client.niche) or "same niche"
+        peer_guidance = f"Only real direct commercial peers in {ind_lbl} ({nich_lbl}) selling similar services/products to similar buyers. NEVER software houses or restaurants unless the client is one."
     prompt = (
         f"Fill exactly {needed} MORE real SAME-TIER peer competitors for this client. "
         f"{geo_block} "
@@ -3359,7 +5027,7 @@ async def _ai_propose_same_tier_peers(
         f"Must-match niche: {_as_str(client.niche) or 'unknown'}. "
         f"Must-match business model: {_as_str(business_model) or 'unknown'}. "
         f"{_peer_scale_prompt_rule(peer_scale, is_food=is_food)} "
-        f"{food_or_sw} "
+        f"{peer_guidance} "
         f"{_brand_geo_disclaimer(client.name, focus)} "
         "Do NOT invent placeholder brands (TechCorp, Soft Solutions, PakTech, AxonSoft). "
         "Do NOT pad with seed-list giants that dwarf the client. "
@@ -3367,7 +5035,7 @@ async def _ai_propose_same_tier_peers(
         "Return JSON: {competitors:[{name, website, industry, business_model, headquarters_country, "
         "why_relevant, threat_level, overlap_score, same_niche:true, same_market:true, is_global_platform:false}]}. "
         f"Return exactly {needed} NEW names not in already_have. Each needs a real https website. "
-        f"Every why_relevant MUST explicitly mention {focus} (city/country) and how they sell there."
+        f"{why_geo_rule}"
     )
     pack = await ai_service.structured_json(
         db,
@@ -3501,11 +5169,27 @@ async def enrich_client_profile(
             temperature=0.15,
         )
 
-    # Never default food brands to "Software" — that pulls NetSol/Systems-style Serp + AI fill
-    default_industry = "Restaurant" if _looks_like_food_client(client.name, client.website, site_md[:800]) else "Software"
+    # Never default food/beauty brands to "Software" — that pulls NetSol/Systems-style Serp + AI fill
+    default_industry = (
+        "Restaurant"
+        if _looks_like_food_client(client.name, client.website, site_md[:800])
+        else ("Beauty & Personal Care" if _looks_like_beauty_client(client.name, client.website, site_md[:800], client.notes, client.tagline) else "Software")
+    )
     client.industry = _as_str(profile.get("industry")) or client.industry or default_industry
     client.niche = _as_str(profile.get("niche")) or client.niche
-    if _looks_like_food_client(client.name, client.website, site_md[:800]):
+    if _looks_like_beauty_client(client.name, client.website, site_md[:800], client.notes, client.tagline):
+        client.industry = "Beauty & Personal Care"
+        niche_l = _as_str(client.niche).lower()
+        if (
+            not client.niche
+            or "restaurant" in niche_l
+            or "software" in niche_l
+            or "food" in niche_l
+            or "it services" in niche_l
+            or niche_l in {"unknown", "general", "services", "other"}
+        ):
+            client.niche = "beauty salon & makeup studio"
+    elif _looks_like_food_client(client.name, client.website, site_md[:800]):
         industry_l = _as_str(client.industry).lower()
         niche_l = _as_str(client.niche).lower()
         name_blob = f"{client.name} {site_md[:800]}".lower()
@@ -3522,7 +5206,7 @@ async def enrich_client_profile(
             client.industry = "Restaurant"
             if any(tok in name_blob for tok in ("shawarma", "shwarma", "doner", "kebab", "kabab")):
                 client.niche = "shawarma / quick-service restaurant"
-            elif any(tok in name_blob for tok in ("bakery", "patisserie", "pastry", "dessert", "cake")):
+            elif any(tok in name_blob for tok in ("bakery", "patisserie", "pastry", "dessert", "cake", "layers", "sweet tooth", "kitchen cuisine", "del frio", "tehzeeb", "gourmet", "rahat")):
                 client.industry = "Bakery"
                 client.niche = "bakery / desserts"
             elif any(tok in name_blob for tok in ("cafe", "café", "coffee")) and "restaurant" not in name_blob:
@@ -3548,6 +5232,10 @@ async def enrich_client_profile(
         # Known pizza brands: keep niche pizza even if AI said only "restaurant"
         elif _food_format_from_blob(client.name, client.niche, client.industry) == _FOOD_FORMAT_PIZZA and "pizza" not in niche_l:
             client.niche = "pizza / quick-service restaurant"
+        # Known bakery brands: keep niche bakery / desserts even if AI said burgers/restaurant
+        elif _food_format_from_blob(client.name, client.niche, client.industry) == _FOOD_FORMAT_BAKERY and not any(tok in niche_l for tok in ("bakery", "dessert", "cake", "pastry")):
+            client.industry = "Bakery"
+            client.niche = "bakery / desserts"
     client.tagline = _as_str(profile.get("tagline")) or client.tagline
     market_area = _as_str(profile.get("market_area")) or _market_area_from_client(client)
     if market_area.strip().lower() in {"global", "worldwide", "international", "world"}:
@@ -3773,14 +5461,19 @@ async def enrich_client_profile(
     }.get(_food_fmt_prompt, "same-format food / restaurant brands")
 
     if scope == "global":
+        home_country = market_area or country or _market_area_from_client(client) or "the local market"
+        is_edu_client = _detect_industry_category(client.name, client.niche, client.industry, business_model) in {"education", "university", "school", "college", "academy"}
+        edu_tier = _detect_education_tier(client.name, client.niche, client.industry, client.notes, client.tagline) if is_edu_client else ""
+
         if _is_food_client_prompt:
             competitor_prompt = (
                 f"Find exactly {count} REAL international food competitors for this brand. "
                 f"They must be {_food_peer_label} — same food format, similar scale. "
+                f"HARD GLOBAL RULE: Every competitor MUST be an established international food / restaurant brand headquartered OUTSIDE {home_country}. "
                 f"Must-match industry: {_as_str(client.industry) or 'Restaurant'}. "
                 f"Must-match niche: {_as_str(client.niche) or 'food'}. "
-                f"Return JSON: {{competitors:[{'{'}name, website, industry, business_model, why_relevant, threat_level, overlap_score, "
-                "same_niche:true, same_market:true, market_overlap, is_global_platform:false{'}'}]}}. "
+                f"Return JSON: {{competitors:[{'{'}name, website, industry, business_model, headquarters_country, why_relevant, threat_level, overlap_score, "
+                "same_niche:true, same_market:false, market_overlap, is_global_platform:false{'}'}]}}. "
                 "Hard rules:\n"
                 f"1) Return exactly {count} NEW competitors — not names in already_have.\n"
                 f"2) ONLY {_food_peer_label}. NEVER software houses, IT firms, FMCG snack makers, or agencies.\n"
@@ -3790,30 +5483,62 @@ async def enrich_client_profile(
                 "6) Never invent placeholder brands.\n"
                 f"7) {_peer_scale_prompt_rule(_peer_scale_from_blob(client.name, client.niche, client.industry, business_model, name=client.name), is_food=True)}."
             )
+        elif is_edu_client and edu_tier == "university":
+            competitor_prompt = (
+                f"Find exactly {count} REAL LEADING INTERNATIONAL / GLOBAL UNIVERSITIES for this client. "
+                f"HARD GLOBAL RULE: Every competitor MUST be a recognized higher education university headquartered OUTSIDE {home_country}. "
+                f"DO NOT return domestic universities from {home_country}. "
+                "Return top global universities (e.g. from United States, United Kingdom, Europe, Australia, Canada, Asia, Middle East) "
+                "with strong programs in engineering, technology, computer science, management, or research. "
+                "STRICTLY FORBIDDEN: K-12 schools, primary/high schools, academies, educational ranking directories (Times Higher Ed, QS, US News). "
+                f"Return JSON: {{competitors:[{'{'}name, website, industry, business_model, headquarters_country, why_relevant, threat_level, overlap_score, "
+                "same_niche:true, same_market:false, is_global_platform:false{'}'}]}}. "
+                "Hard rules:\n"
+                f"1) Return exactly {count} NEW competitors — not names in already_have.\n"
+                "2) Each MUST be an accredited degree-awarding university with real homepage URL (https://...).\n"
+                "3) overlap_score 75-95.\n"
+                "4) Never invent placeholder names."
+            )
+        elif is_edu_client and edu_tier == "school":
+            competitor_prompt = (
+                f"Find exactly {count} REAL INTERNATIONAL / GLOBAL K-12 SCHOOL SYSTEMS for this client. "
+                f"HARD GLOBAL RULE: Every competitor MUST be a recognized international private school system or board headquartered OUTSIDE {home_country}. "
+                f"DO NOT return schools from {home_country}. "
+                "STRICTLY FORBIDDEN: Universities, medical colleges, degree-awarding institutions. "
+                f"Return JSON: {{competitors:[{'{'}name, website, industry, business_model, headquarters_country, why_relevant, threat_level, overlap_score, "
+                "same_niche:true, same_market:false, is_global_platform:false{'}'}]}}. "
+                "Hard rules:\n"
+                f"1) Return exactly {count} NEW competitors — not names in already_have.\n"
+                "2) Each MUST be a recognized K-12 school network with real homepage URL.\n"
+                "3) overlap_score 75-95."
+            )
         else:
+            is_sw_prompt = _looks_like_software_peer_client(client.name, client.niche, client.industry, business_model)
+            sw_rule = (
+                "2) Only commercial software engineering houses / digital consulting / IT services firms with international delivery.\n"
+                if is_sw_prompt
+                else f"2) Only peer businesses in {_as_str(client.industry) or 'the same industry'} ({_as_str(client.niche) or 'same niche'}). NEVER software houses unless client is one.\n"
+            )
             competitor_prompt = (
                 f"Find exactly {count} REAL direct competitors for this company with GLOBAL / international reach. "
+                f"HARD GLOBAL RULE: Every competitor MUST be a well-known international / global company headquartered OUTSIDE {home_country}. "
+                f"Do NOT return domestic/local companies from {home_country}. "
                 "They must compete in the SAME niche, SAME industry, and similar business model / buyer. "
                 f"Must-match industry: {_as_str(client.industry) or 'unknown'}. "
                 f"Must-match niche: {_as_str(client.niche) or 'unknown'}. "
                 f"Must-match business model: {_as_str(business_model) or 'unknown'}. "
-                f"Return JSON: {{competitors:[{'{'}name, website, industry, business_model, why_relevant, threat_level, overlap_score, "
-                "same_niche:true, same_market:true, market_overlap, is_global_platform:false{'}'}]}}. "
+                f"Return JSON: {{competitors:[{'{'}name, website, industry, business_model, headquarters_country, why_relevant, threat_level, overlap_score, "
+                "same_niche:true, same_market:false, is_global_platform:false{'}'}]}}. "
                 "Hard rules:\n"
                 f"1) Return exactly {count} NEW competitors — not names in already_have.\n"
-                "2) Only peer businesses selling a similar product/service to similar buyers — not adjacent tools.\n"
+                f"{sw_rule}"
                 "3) EXCLUDE directories, review sites, job boards, news articles, and hyperscaler platforms "
                 "(AWS/Azure/GCP as clouds, Dialogflow as a raw API) unless they are a true peer product.\n"
-                "4) why_relevant must cite industry + niche + buyer overlap.\n"
-                "5) overlap_score should reflect true peer fit (prefer 60-95). Reject weak/tangential names.\n"
-                "6) Only include companies you believe actually exist with real websites. "
-                "Never invent placeholder brands like TechCorp, Soft Solutions, PakTech Solutions, AxonSoft.\n"
-                f"7) {_peer_scale_prompt_rule(_peer_scale_from_blob(client.name, client.niche, client.industry, business_model, name=client.name), is_food=False)}."
-                + (
-                    f" 8) {_brand_geo_disclaimer(client.name, country or market_area or 'the selected market')}"
-                    if _brand_geo_disclaimer(client.name, country or market_area or "")
-                    else ""
-                )
+                "4) why_relevant must cite industry + niche + global benchmark comparison.\n"
+                "5) overlap_score should reflect true peer fit (prefer 70-95).\n"
+                "6) Only include companies you believe actually exist with real working websites (https://...).\n"
+                "7) Never invent placeholder brands (TechCorp, Soft Solutions, PakTech Solutions, AxonSoft).\n"
+                f"8) {_peer_scale_prompt_rule(_peer_scale_from_blob(client.name, client.niche, client.industry, business_model, name=client.name), is_food=False)}."
             )
     else:
         focus = country or market_area or "the client's primary country/region"
@@ -3848,6 +5573,12 @@ async def enrich_client_profile(
                 )
             )
         else:
+            is_sw_prompt = _looks_like_software_peer_client(client.name, client.niche, client.industry, business_model)
+            sw_rule = (
+                "12) Prefer commercial software houses / digital agencies / IT services firms as peers for a software house client.\n"
+                if is_sw_prompt
+                else f"12) Prefer real peer commercial businesses in {_as_str(client.industry) or 'the same industry'} ({_as_str(client.niche) or 'same niche'}). NEVER software houses unless the client is one.\n"
+            )
             competitor_prompt = (
                 f"Find exactly {count} REAL direct LOCAL / country competitors for this company in {focus}. "
                 f"HARD GEO RULE: every competitor MUST be headquartered in OR primarily selling in {focus}. "
@@ -3868,13 +5599,13 @@ async def enrich_client_profile(
                 "6) EXCLUDE fintech wallets, payment apps, banks, and remittance apps "
                 "(NayaPay, EasyPaisa, JazzCash, SadaPay) unless the client itself is fintech/payments.\n"
                 "7) EXCLUDE government boards, ministries, regulators, and public-sector IT bodies "
-                "(PITB, NADRA, ministries, authorities) — they are not commercial software-house rivals.\n"
+                "(PITB, NADRA, ministries, authorities) — they are not commercial business rivals.\n"
                 "8) EXCLUDE global hyperscalers and mega consultancies "
                 "(Accenture, IBM, Microsoft, Google, Amazon/AWS, Oracle, SAP, Deloitte, PwC, EY, KPMG, Cognizant, Infosys, TCS, Wipro, OpenAI).\n"
                 "9) EXCLUDE directories, review sites, and tools/infrastructure that are not peer businesses.\n"
                 f"10) If you are unsure a company is based in / sells primarily in {focus}, OMIT it.\n"
-                "11) Same 'Technology' industry is NOT enough — they must sell a similar product/service to similar buyers.\n"
-                "12) Prefer commercial software houses / digital agencies / IT services firms as peers for a software house client.\n"
+                "11) Same generic category is NOT enough — they must sell a similar product/service to similar buyers.\n"
+                f"{sw_rule}"
                 "13) NEVER invent placeholder brands (TechCorp, Soft Solutions, SoftCorp, PakTech Solutions, AxonSoft, IT Solutions). "
                 "Only well-known or clearly real companies with working websites.\n"
                 "14) overlap_score should reflect true peer fit (prefer 60-95).\n"
@@ -4000,7 +5731,16 @@ async def enrich_client_profile(
         temperature=0.15,
     )
     if isinstance(competitor_pack.get("competitors"), list):
-        competitor_items.extend([c for c in competitor_pack["competitors"] if isinstance(c, dict)])
+        for c in competitor_pack["competitors"]:
+            if isinstance(c, dict):
+                c_copy = {**c}
+                if not c_copy.get("source"):
+                    c_copy["source"] = "ai"
+                if not c_copy.get("headquarters_country") and local_focus:
+                    c_copy["headquarters_country"] = local_focus
+                if not c_copy.get("overlap_score"):
+                    c_copy["overlap_score"] = 75.0
+                competitor_items.append(c_copy)
     competitor_items = _apply_relevance_filter(competitor_items)
 
     # Gap-fill remaining slots with same-tier AI peers (NOT curated seed lists)
@@ -4039,8 +5779,11 @@ async def enrich_client_profile(
         competitor_items.extend(fill_rows)
         competitor_items = _apply_relevance_filter(competitor_items)
 
-    # Last resort for food/local when SerpAPI is down and AI returned nothing usable
+    # Last resort when SerpAPI is down and AI returned nothing usable
     is_food_client = _looks_like_food_client(
+        client.name, client.industry, client.niche, business_model, site_md[:800]
+    )
+    is_beauty_client = _looks_like_beauty_client(
         client.name, client.industry, client.niche, business_model, site_md[:800]
     )
     fresh_so_far = _pick_fresh(competitor_items)
@@ -4070,6 +5813,73 @@ async def enrich_client_profile(
             local_focus,
             len(competitor_items),
         )
+    elif (
+        is_beauty_client
+        and scope == "local"
+        and local_focus
+        and len(fresh_so_far) < count
+    ):
+        already = already_have_names + [_as_str(c.get("name")) for c in fresh_so_far]
+        seed_rows = _seed_local_beauty_rivals(
+            local_focus,
+            client.name,
+            already_have=already,
+            client_website=client.website,
+            client_niche=_as_str(client.niche),
+            client_industry=_as_str(client.industry),
+            limit=max(count * 2, 8),
+        )
+        competitor_items.extend(seed_rows)
+        competitor_items = _apply_relevance_filter(competitor_items)
+        logger.warning(
+            "Beauty/local last-resort peers used for client=%s market=%s (SERP/AI thin) kept=%s",
+            client.id,
+            local_focus,
+            len(competitor_items),
+        )
+
+    # Multi-industry last resort when live SerpAPI / AI is thin
+    fresh_so_far = _pick_fresh(competitor_items)
+    if scope == "local" and local_focus and len(fresh_so_far) < count:
+        already = already_have_names + [_as_str(c.get("name")) for c in fresh_so_far]
+        industry_seed_rows = _seed_local_industry_rivals(
+            f"{_as_str(client.industry)} {_as_str(client.niche)}",
+            local_focus,
+            client.name,
+            already_have=already,
+            client_website=client.website,
+            limit=max(count * 2, 8),
+        )
+        if industry_seed_rows:
+            competitor_items.extend(industry_seed_rows)
+            competitor_items = _apply_relevance_filter(competitor_items)
+            logger.warning(
+                "Multi-industry last-resort peers used for client=%s industry=%s market=%s kept=%s",
+                client.id,
+                client.industry,
+                local_focus,
+                len(competitor_items),
+            )
+    elif scope == "global" and len(fresh_so_far) < count:
+        already = already_have_names + [_as_str(c.get("name")) for c in fresh_so_far]
+        global_seed_rows = _seed_global_industry_rivals(
+            f"{_as_str(client.industry)} {_as_str(client.niche)}",
+            client.name,
+            already_have=already,
+            client_website=client.website,
+            client_niche=_as_str(client.niche),
+            client_market=market_area or country or "",
+            limit=max(count * 2, 8),
+        )
+        if global_seed_rows:
+            competitor_items.extend(global_seed_rows)
+            competitor_items = _apply_relevance_filter(competitor_items)
+            logger.info(
+                "Global seed catalog peers used for client=%s industry=%s kept=%s",
+                client.id,
+                client.industry,
+                len(competitor_items),
+            )
 
     existing = (
         await db.execute(select(Competitor).where(Competitor.client_id == client.id, Competitor.agency_id == agency.id))
@@ -4125,10 +5935,8 @@ async def enrich_client_profile(
             )
         ):
             competitor.is_tracking = False
-            competitor.is_pinned = False
-            continue
-        # add = keep-current promise: do NOT drop existing for new country / global scope
-        if mode != "add" and not _rival_fits_run_scope(
+        # In global mode or non-add mode, existing rivals that do not match the run scope must be untracked
+        if (scope == "global" or mode != "add") and (not competitor.is_pinned) and not _rival_fits_run_scope(
             name=_as_str(competitor.name),
             website=competitor.website,
             headquarters=competitor.headquarters,
@@ -4153,8 +5961,8 @@ async def enrich_client_profile(
 
     pruned_global = 0
     for competitor in existing:
-        # add mode: never wipe previous list for geo/scope — only replace/update re-scope
-        if mode == "add" and (competitor.is_tracking or competitor.is_pinned):
+        # add mode: never wipe previous list for geo/scope unless scope is global
+        if mode == "add" and scope != "global" and (competitor.is_tracking or competitor.is_pinned):
             continue
         if competitor.is_pinned and _rival_fits_run_scope(
             name=_as_str(competitor.name),
@@ -4215,26 +6023,61 @@ async def enrich_client_profile(
             business_model=business_model,
             serp_candidates=competitor_items[:12],
         )
-        competitor_items.extend(more)
-        if (
-            len(_pick_fresh(competitor_items)) < ai_slots
-            and _looks_like_food_client(client.name, client.industry, client.niche, business_model)
-            and scope == "local"
-            and local_focus
-        ):
-            competitor_items.extend(
-                _seed_local_qsr_rivals(
-                    local_focus,
-                    client.name,
-                    already_have=already + [_as_str(c.get("name")) for c in more],
-                    client_website=client.website,
-                    client_tier=_food_tier_from_blob(client.name, client.niche, client.industry, business_model),
-                    client_niche=_as_str(client.niche),
-                    client_industry=_as_str(client.industry),
-                    limit=max(ai_slots * 2, 8),
-                )
-            )
         fresh_items = _pick_fresh(competitor_items)
+        if len(fresh_items) < ai_slots:
+            already = already_have_names + [_as_str(c.get("name")) for c in fresh_items]
+            if scope == "local" and local_focus:
+                if _looks_like_food_client(client.name, client.industry, client.niche, business_model):
+                    competitor_items.extend(
+                        _seed_local_qsr_rivals(
+                            local_focus,
+                            client.name,
+                            already_have=already,
+                            client_website=client.website,
+                            client_tier=_food_tier_from_blob(client.name, client.niche, client.industry, business_model),
+                            client_niche=_as_str(client.niche),
+                            client_industry=_as_str(client.industry),
+                            limit=max(ai_slots * 2, 8),
+                        )
+                    )
+                elif _looks_like_beauty_client(client.name, client.industry, client.niche, business_model):
+                    competitor_items.extend(
+                        _seed_local_beauty_rivals(
+                            local_focus,
+                            client.name,
+                            already_have=already,
+                            client_website=client.website,
+                            client_niche=_as_str(client.niche),
+                            client_industry=_as_str(client.industry),
+                            limit=max(ai_slots * 2, 8),
+                        )
+                    )
+                else:
+                    competitor_items.extend(
+                        _seed_local_industry_rivals(
+                            f"{_as_str(client.industry)} {_as_str(client.niche)}",
+                            local_focus,
+                            client.name,
+                            already_have=already,
+                            client_website=client.website,
+                            client_niche=_as_str(client.niche),
+                            limit=max(ai_slots * 2, 8),
+                        )
+                    )
+            elif scope == "global":
+                competitor_items.extend(
+                    _seed_global_industry_rivals(
+                        f"{_as_str(client.industry)} {_as_str(client.niche)}",
+                        client.name,
+                        already_have=already,
+                        client_website=client.website,
+                        client_niche=_as_str(client.niche),
+                        client_market=market_area or country or "",
+                        limit=max(ai_slots * 2, 8),
+                    )
+                )
+            competitor_items = _apply_relevance_filter(competitor_items)
+            fresh_items = _pick_fresh(competitor_items)
 
     deduped = fresh_items
 
@@ -4291,25 +6134,49 @@ async def enrich_client_profile(
             existing.append(competitor)
             created_competitors += 1
 
-    # Enforce this run's local/global filter on the tracked list (UI shows is_tracking only)
+    # Enforce exact slider count on the tracked list (UI shows is_tracking only)
     scope_market = (country or market_area) if scope == "local" else (country or market_area or "")
-    for rival in existing:
-        if rival.is_pinned or mode == "add":
-            continue
-        if not _rival_fits_run_scope(
-            name=_as_str(rival.name),
-            website=rival.website,
-            headquarters=rival.headquarters,
-            description=rival.description,
-            why=rival.why_dangerous,
-            scope=scope,
-            market=scope_market,
-            client_name=client.name,
-            is_pinned=False,
-            strict=False,
-        ):
-            rival.is_tracking = False
-            pruned_global += 1
+    if mode != "add":
+        for rival in existing:
+            if rival.is_pinned:
+                continue
+            if not _rival_fits_run_scope(
+                name=_as_str(rival.name),
+                website=rival.website,
+                headquarters=rival.headquarters,
+                description=rival.description,
+                why=rival.why_dangerous,
+                scope=scope,
+                market=scope_market,
+                client_name=client.name,
+                is_pinned=False,
+                strict=False,
+            ):
+                rival.is_tracking = False
+                pruned_global += 1
+
+    pinned_cur = [c for c in existing if c.is_pinned]
+    others_cur = sorted(
+        [c for c in existing if not c.is_pinned and c.is_tracking],
+        key=lambda c: float(c.overlap_score or 0),
+        reverse=True,
+    )
+    if mode == "add":
+        baseline_keys = {
+            k for c in protected_existing for k in _rival_keys(c.name, c.website)
+        }
+        baseline_others = [c for c in others_cur if _rival_keys(c.name, c.website) & baseline_keys]
+        fresh_others = [c for c in others_cur if not (_rival_keys(c.name, c.website) & baseline_keys)]
+        active_fresh = fresh_others[:count]
+        active_all = set(baseline_others + active_fresh)
+        for c in others_cur:
+            c.is_tracking = c in active_all
+    else:
+        max_others = max(0, count - len(pinned_cur))
+        for c in others_cur[:max_others]:
+            c.is_tracking = True
+        for c in others_cur[max_others:]:
+            c.is_tracking = False
 
     await db.flush()
     return {
@@ -4399,10 +6266,24 @@ async def run_competitive_pack(
             )
         ).scalars().all()
 
-    # Drop auto-tracked rivals that clearly don't match this run's local/global filter
+    # Drop auto-tracked rivals that clearly don't match this run's local/global filter or are incompatible
     scope_market = required_market if scope == "local" else (required_market or "")
+    baseline_set_early = {_as_str(n).lower().strip() for n in (baseline_names or []) if _as_str(n)}
     for rival in competitors:
-        if not _rival_fits_run_scope(
+        if rival.is_pinned:
+            rival.is_tracking = True
+            continue
+        rival_blob = f"{rival.name} {_as_str(rival.description)} {_as_str(rival.why_dangerous)}"
+        incompat = _incompatible_peer(
+            client_model=_business_model_from_client(client),
+            client_industry=_as_str(client.industry),
+            client_niche=_as_str(client.niche),
+            rival_model="other",
+            rival_industry=_as_str(rival.description or ""),
+            rival_blob=rival_blob,
+            client_name=client.name,
+        )
+        fits_scope = _rival_fits_run_scope(
             name=_as_str(rival.name),
             website=rival.website,
             headquarters=rival.headquarters,
@@ -4413,28 +6294,133 @@ async def run_competitive_pack(
             client_name=client.name,
             is_pinned=False,
             strict=False,
-        ):
+        )
+        if incompat or not fits_scope:
             rival.is_tracking = False
             rival.is_pinned = False
             continue
-        if rival.is_pinned:
+        if mode == "add" and _as_str(rival.name).lower().strip() in baseline_set_early:
+            rival.is_tracking = True
             continue
     competitors = [c for c in competitors if c.is_tracking or c.is_pinned]
+    if len(competitors) < count:
+        already_keys: set[str] = set()
+        for c in competitors:
+            already_keys |= _rival_keys(c.name, c.website)
+        already_names = [_as_str(c.name) for c in competitors]
+        needed = count - len(competitors)
+        backfill_items: list[dict] = []
+        if scope == "global":
+            backfill_items = _seed_global_industry_rivals(
+                f"{_as_str(client.industry)} {_as_str(client.niche)}",
+                client.name,
+                already_have=already_names,
+                client_website=client.website,
+                client_niche=_as_str(client.niche),
+                client_market=required_market or "",
+                limit=needed * 2,
+            )
+        elif scope == "local" and required_market:
+            if _looks_like_food_client(client.name, client.industry, client.niche, _business_model_from_client(client)):
+                backfill_items = _seed_local_qsr_rivals(
+                    required_market,
+                    client.name,
+                    already_have=already_names,
+                    client_website=client.website,
+                    client_tier=_food_tier_from_blob(client.name, client.niche, client.industry, _business_model_from_client(client)),
+                    client_niche=_as_str(client.niche),
+                    client_industry=_as_str(client.industry),
+                    limit=needed * 2,
+                )
+            elif _looks_like_beauty_client(client.name, client.industry, client.niche, _business_model_from_client(client)):
+                backfill_items = _seed_local_beauty_rivals(
+                    required_market,
+                    client.name,
+                    already_have=already_names,
+                    client_website=client.website,
+                    client_niche=_as_str(client.niche),
+                    client_industry=_as_str(client.industry),
+                    limit=needed * 2,
+                )
+            else:
+                backfill_items = _seed_local_industry_rivals(
+                    f"{_as_str(client.industry)} {_as_str(client.niche)}",
+                    required_market,
+                    client.name,
+                    already_have=already_names,
+                    client_website=client.website,
+                    client_niche=_as_str(client.niche),
+                    limit=needed * 2,
+                )
+        for item in backfill_items:
+            name = _clean_rival_display_name(_as_str(item.get("name")).strip())
+            website = _normalize_website(_as_str(item.get("website")) or None)
+            if not name or not website:
+                continue
+            item_keys = _rival_keys(name, website)
+            if item_keys & already_keys:
+                continue
+            row = (
+                await db.execute(
+                    select(Competitor).where(
+                        Competitor.client_id == client.id,
+                        Competitor.agency_id == agency.id,
+                        Competitor.name.ilike(name),
+                    )
+                )
+            ).scalars().first()
+            if row:
+                row.is_tracking = True
+                row.website = website
+                row.headquarters = _as_str(item.get("headquarters_country") or item.get("headquarters")) or row.headquarters
+                row.description = _as_str(item.get("why_relevant")) or row.description
+                row.why_dangerous = _as_str(item.get("why_relevant")) or row.why_dangerous
+                row.overlap_score = float(item.get("overlap_score") or 85.0)
+                competitors.append(row)
+            else:
+                new_comp = Competitor(
+                    agency_id=agency.id,
+                    client_id=client.id,
+                    name=name,
+                    website=website,
+                    description=_as_str(item.get("why_relevant")) or None,
+                    why_dangerous=_as_str(item.get("why_relevant")) or None,
+                    headquarters=_as_str(item.get("headquarters_country") or item.get("headquarters")) or None,
+                    threat_level="high",
+                    overlap_score=float(item.get("overlap_score") or 85.0),
+                    is_tracking=True,
+                )
+                db.add(new_comp)
+                competitors.append(new_comp)
+            already_keys |= item_keys
+            if len(competitors) >= count:
+                break
     await db.flush()
 
-    # update: refresh up to `count` existing. add: keep all tracked. replace: pinned + up to `count` fresh.
+    # Enforce exact slider count: pinned first + top-overlap others up to count
     pinned = [c for c in competitors if c.is_pinned]
     others = sorted(
         [c for c in competitors if not c.is_pinned],
         key=lambda c: float(c.overlap_score or 0),
         reverse=True,
     )
-    if mode == "update":
-        competitors = (pinned + others)[: max(count, len(pinned))]
-    elif mode == "replace":
-        competitors = pinned + others[:count]
+    if mode == "add":
+        baseline_others = [c for c in others if _as_str(c.name).lower().strip() in baseline_set_early]
+        fresh_others = [c for c in others if _as_str(c.name).lower().strip() not in baseline_set_early]
+        active_fresh = fresh_others[:count]
+        active_others = baseline_others + active_fresh
+        for extra in [c for c in others if c not in active_others]:
+            extra.is_tracking = False
+        for active in active_others:
+            active.is_tracking = True
+        competitors = pinned + active_others
     else:
-        competitors = pinned + others
+        max_others = max(0, count - len(pinned))
+        competitors = pinned + others[:max_others]
+        for extra in others[max_others:]:
+            extra.is_tracking = False
+        for active in others[:max_others]:
+            active.is_tracking = True
 
     if not features or not competitors:
         if not features and not competitors:
@@ -4447,24 +6433,13 @@ async def run_competitive_pack(
                 "Could not extract product features for this client. Add a website, then run intel again "
                 "or add features manually."
             )
-        is_food = _looks_like_food_client(
+        peer_hint = _client_peer_hint(
             client.name,
             client.industry,
             client.niche,
             _business_model_from_client(client),
             client.notes,
             client.tagline,
-        )
-        peer_hint = (
-            _food_rival_peer_hint(
-                client.name, client.industry, client.niche, client.notes, client.tagline
-            )
-            if is_food
-            else "software-house / digital-agency rivals"
-            if _looks_like_software_peer_client(
-                client.name, client.industry, client.niche, _business_model_from_client(client)
-            )
-            else "same-industry peer rivals"
         )
         market_bit = f" in {required_market}" if scope == "local" and required_market else ""
         raise ValueError(
@@ -4601,9 +6576,12 @@ async def run_competitive_pack(
         competitor.description = _as_str(analysis.get("description")) or competitor.description
         competitor.headquarters = _as_str(analysis.get("headquarters") or analysis.get("headquarters_country")) or competitor.headquarters
         try:
-            competitor.overlap_score = float(analysis.get("overlap_score") or competitor.overlap_score or 55)
+            raw_score = float(analysis.get("overlap_score") or competitor.overlap_score or 75.0)
+            if 0 < raw_score <= 10.0:
+                raw_score = raw_score * 10.0
+            competitor.overlap_score = max(55.0, min(95.0, raw_score))
         except (TypeError, ValueError):
-            competitor.overlap_score = competitor.overlap_score or 55
+            competitor.overlap_score = competitor.overlap_score or 75.0
         competitor.threat_level = _as_str(analysis.get("threat_level") or competitor.threat_level or "medium").lower()
         if competitor.threat_level not in {"low", "medium", "high"}:
             competitor.threat_level = "medium"
@@ -4652,6 +6630,7 @@ async def run_competitive_pack(
             f"{_as_str(client.industry)} {_as_str(client.niche)} {_business_model_from_client(client)} "
             f"{_as_str(client.notes)} {_as_str(client.tagline)} {client.name} {client_feature_blob}"
         )
+        client_is_beauty = _looks_like_beauty_client(client_kind_blob)
         client_is_food = _looks_like_food_client(client_kind_blob)
         client_is_software_peer = _looks_like_software_peer_client(client_kind_blob)
         bad_peer = _incompatible_peer(
@@ -4666,7 +6645,7 @@ async def run_competitive_pack(
         curated = _is_curated_seed_rival(
             competitor.name,
             required_market,
-            kind="food" if client_is_food else ("software" if client_is_software_peer else None),
+            kind="food" if client_is_food else ("software" if client_is_software_peer else ("beauty" if client_is_beauty else None)),
         )
         client_food_tier = (
             _food_tier_from_blob(client.name, client.niche, client.industry, _business_model_from_client(client))
@@ -4822,11 +6801,24 @@ async def run_competitive_pack(
             kept.insert(0, competitor)
             kept_ids.add(competitor.id)
 
-    # Add mode: restore every baseline rival that is still in DB (keep current promise)
+    # Add mode: restore baseline rivals that fit this run's scope
     if mode == "add" and baseline_set:
         for competitor in analyzed:
             name_key = _as_str(competitor.name).lower().strip()
             if competitor.id in kept_ids or name_key not in baseline_set:
+                continue
+            if not competitor.is_pinned and not _rival_fits_run_scope(
+                name=competitor.name,
+                website=competitor.website,
+                headquarters=competitor.headquarters,
+                description=competitor.description,
+                why=competitor.why_dangerous,
+                scope=scope,
+                market=scope_market,
+                client_name=client.name,
+                is_pinned=False,
+                strict=False,
+            ):
                 continue
             if (
                 _is_generic_or_fake_rival_name(competitor.name)
@@ -4861,6 +6853,19 @@ async def run_competitive_pack(
         for rival in existing_all_baseline:
             name_key = _as_str(rival.name).lower().strip()
             if rival.id in kept_ids or name_key not in baseline_set:
+                continue
+            if not rival.is_pinned and not _rival_fits_run_scope(
+                name=rival.name,
+                website=rival.website,
+                headquarters=rival.headquarters,
+                description=rival.description,
+                why=rival.why_dangerous,
+                scope=scope,
+                market=scope_market,
+                client_name=client.name,
+                is_pinned=False,
+                strict=False,
+            ):
                 continue
             if (
                 _is_generic_or_fake_rival_name(rival.name)
@@ -5178,6 +7183,84 @@ async def run_competitive_pack(
             kept_ids.add(competitor.id)
             analyzed.append(competitor)
 
+    # Beauty/local last resort — fill to requested count with curated beauty brands
+    if (
+        len(kept) < target_kept
+        and scope == "local"
+        and required_market
+        and _looks_like_beauty_client(
+            client.name,
+            client.industry,
+            client.niche,
+            _business_model_from_client(client),
+            client.notes,
+            client.tagline,
+        )
+    ):
+        existing_all = (
+            await db.execute(
+                select(Competitor).where(
+                    Competitor.client_id == client.id,
+                    Competitor.agency_id == agency.id,
+                )
+            )
+        ).scalars().all()
+        already_names = [_as_str(c.name) for c in kept]
+        for item in _seed_local_beauty_rivals(
+            required_market,
+            client.name,
+            already_have=already_names,
+            client_website=client.website,
+            client_niche=_as_str(client.niche),
+            client_industry=_as_str(client.industry),
+            limit=max(count * 2, 8),
+        ):
+            if len(kept) >= target_kept:
+                break
+            name = _as_str(item.get("name")).strip()
+            website = _normalize_website(_as_str(item.get("website")) or None)
+            if not name or not website:
+                continue
+            if _looks_like_brand_geo_hallucination(
+                client.name, name, required_market, website=website, source="seed"
+            ):
+                continue
+            competitor = _find_matching_competitor(existing_all, name, website)
+            why = _as_str(item.get("why_relevant")) or None
+            if competitor:
+                if competitor.id in kept_ids:
+                    continue
+                competitor.website = website or competitor.website
+                competitor.headquarters = competitor.headquarters or required_market
+                competitor.description = competitor.description or why
+                competitor.why_dangerous = competitor.why_dangerous or why
+                competitor.overlap_score = max(float(competitor.overlap_score or 0), 74.0)
+                competitor.threat_level = (
+                    "high" if competitor.threat_level == "low" else (competitor.threat_level or "high")
+                )
+                competitor.is_tracking = True
+                competitor.is_pinned = False
+            else:
+                competitor = Competitor(
+                    agency_id=agency.id,
+                    client_id=client.id,
+                    name=name,
+                    website=website,
+                    description=why,
+                    why_dangerous=why,
+                    headquarters=required_market,
+                    threat_level="high",
+                    overlap_score=76.0,
+                    is_tracking=True,
+                    feature_list=[],
+                )
+                db.add(competitor)
+                await db.flush()
+                existing_all.append(competitor)
+            kept.append(competitor)
+            kept_ids.add(competitor.id)
+            analyzed.append(competitor)
+
     # Software/local last resort — fill to requested count with curated peer houses
     if (
         len(kept) < target_kept
@@ -5202,33 +7285,8 @@ async def run_competitive_pack(
         user_country = _as_str(competitor_country).strip()
         seed_market = user_country or required_market or _market_area_from_client(client)
         home = _known_brand_home_market(client.name, client.website)
-        seed_rows = _seed_local_software_rivals(
-            seed_market,
-            client.name,
-            already_have=already_names,
-            client_website=client.website,
-            client_niche=_as_str(client.niche),
-            client_industry=_as_str(client.industry),
-            limit=max(count * 2, 8),
-        )
-        # Only fall back to brand-home seeds when the user did NOT pick a country
-        if (
-            not seed_rows
-            and not user_country
-            and home
-            and _normalize_country_key(home) != _normalize_country_key(seed_market)
-        ):
-            seed_rows = _seed_local_software_rivals(
-                home,
-                client.name,
-                already_have=already_names,
-                client_website=client.website,
-                client_niche=_as_str(client.niche),
-                client_industry=_as_str(client.industry),
-                limit=max(count * 2, 8),
-            )
-            seed_market = home
-        if not seed_rows and scope == "global":
+        seed_rows: list[dict] = []
+        if scope == "global":
             # Global software peers from curated international list
             for seed in _GLOBAL_SOFTWARE_SEEDS:
                 name = _as_str(seed.get("name")).strip()
@@ -5241,15 +7299,41 @@ async def run_competitive_pack(
                     {
                         "name": name,
                         "website": website,
-                        "why_relevant": f"Global software / digital peer for {client.name}",
-                        "overlap_score": 74.0,
+                        "why_relevant": f"Global software / digital engineering peer for {client.name}",
+                        "overlap_score": 85.0,
                         "threat_level": "high",
                         "source": "seed",
-                        "headquarters_country": _as_str(seed.get("headquarters_country")) or None,
+                        "headquarters_country": _as_str(seed.get("headquarters_country")) or "United States",
                     }
                 )
                 if len(seed_rows) >= count * 2:
                     break
+        else:
+            seed_rows = _seed_local_software_rivals(
+                seed_market,
+                client.name,
+                already_have=already_names,
+                client_website=client.website,
+                client_niche=_as_str(client.niche),
+                client_industry=_as_str(client.industry),
+                limit=max(count * 2, 8),
+            )
+            # Only fall back to brand-home seeds when the user did NOT pick a country
+            if (
+                not seed_rows
+                and not user_country
+                and home
+                and _normalize_country_key(home) != _normalize_country_key(seed_market)
+            ):
+                seed_rows = _seed_local_software_rivals(
+                    home,
+                    client.name,
+                    already_have=already_names,
+                    client_website=client.website,
+                    client_niche=_as_str(client.niche),
+                    client_industry=_as_str(client.industry),
+                    limit=max(count * 2, 8),
+                )
         for item in seed_rows:
             if len(kept) >= target_kept:
                 break
@@ -5301,6 +7385,129 @@ async def run_competitive_pack(
                 len(kept),
                 target_kept,
             )
+
+    # Multi-industry last resort when live SerpAPI / AI is thin
+    if len(kept) < target_kept and scope == "local" and required_market:
+        existing_all = (
+            await db.execute(
+                select(Competitor).where(
+                    Competitor.client_id == client.id,
+                    Competitor.agency_id == agency.id,
+                )
+            )
+        ).scalars().all()
+        already_names = [_as_str(c.name) for c in kept]
+        industry_seed_rows = _seed_local_industry_rivals(
+            f"{_as_str(client.industry)} {_as_str(client.niche)}",
+            required_market,
+            client.name,
+            already_have=already_names,
+            client_website=client.website,
+            limit=max(count * 2, 8),
+        )
+        for item in industry_seed_rows:
+            if len(kept) >= target_kept:
+                break
+            name = _as_str(item.get("name")).strip()
+            website = _normalize_website(_as_str(item.get("website")) or None)
+            if not name or not website:
+                continue
+            competitor = _find_matching_competitor(existing_all, name, website)
+            why = _as_str(item.get("why_relevant")) or None
+            if competitor:
+                if competitor.id in kept_ids:
+                    continue
+                competitor.website = website or competitor.website
+                competitor.headquarters = competitor.headquarters or required_market
+                competitor.description = competitor.description or why
+                competitor.why_dangerous = competitor.why_dangerous or why
+                competitor.overlap_score = max(float(competitor.overlap_score or 0), 85.0)
+                competitor.threat_level = "high"
+                competitor.is_tracking = True
+                competitor.is_pinned = False
+            else:
+                competitor = Competitor(
+                    agency_id=agency.id,
+                    client_id=client.id,
+                    name=name,
+                    website=website,
+                    description=why,
+                    why_dangerous=why,
+                    headquarters=required_market,
+                    threat_level="high",
+                    overlap_score=85.0,
+                    is_tracking=True,
+                    feature_list=[],
+                )
+                db.add(competitor)
+                await db.flush()
+                existing_all.append(competitor)
+            kept.append(competitor)
+            kept_ids.add(competitor.id)
+            analyzed.append(competitor)
+
+    # Global multi-industry last resort when scope is global and kept < target_kept
+    if len(kept) < target_kept and scope == "global":
+        existing_all = (
+            await db.execute(
+                select(Competitor).where(
+                    Competitor.client_id == client.id,
+                    Competitor.agency_id == agency.id,
+                )
+            )
+        ).scalars().all()
+        already_names = [_as_str(c.name) for c in kept]
+        client_home_mkt = _market_area_from_client(client) or _known_brand_home_market(client.name, client.website) or ""
+        global_seed_rows = _seed_global_industry_rivals(
+            f"{_as_str(client.industry)} {_as_str(client.niche)}",
+            client.name,
+            already_have=already_names,
+            client_website=client.website,
+            client_niche=_as_str(client.niche),
+            client_market=client_home_mkt,
+            limit=max(count * 2, 8),
+        )
+        for item in global_seed_rows:
+            if len(kept) >= target_kept:
+                break
+            name = _as_str(item.get("name")).strip()
+            website = _normalize_website(_as_str(item.get("website")) or None)
+            if not name or not website or _is_generic_or_fake_rival_name(name):
+                continue
+            competitor = _find_matching_competitor(existing_all, name, website)
+            why = _as_str(item.get("why_relevant")) or f"Leading international peer benchmark in {item.get('headquarters_country', 'global market')}"
+            hq = _as_str(item.get("headquarters_country")) or "United States"
+            if competitor:
+                if competitor.id in kept_ids:
+                    continue
+                competitor.website = website or competitor.website
+                competitor.headquarters = competitor.headquarters or hq
+                competitor.description = competitor.description or why
+                competitor.why_dangerous = competitor.why_dangerous or why
+                competitor.overlap_score = max(float(competitor.overlap_score or 0), 85.0)
+                competitor.threat_level = "high"
+                competitor.is_tracking = True
+                competitor.is_pinned = False
+            else:
+                competitor = Competitor(
+                    agency_id=agency.id,
+                    client_id=client.id,
+                    name=name,
+                    website=website,
+                    description=why,
+                    why_dangerous=why,
+                    headquarters=hq,
+                    threat_level="high",
+                    overlap_score=85.0,
+                    is_tracking=True,
+                    feature_list=[],
+                )
+                db.add(competitor)
+                await db.flush()
+                existing_all.append(competitor)
+            kept.append(competitor)
+            kept_ids.add(competitor.id)
+            analyzed.append(competitor)
 
     if not kept and analyzed:
         # Prefer strongest overlaps that are not megacorp/noise domains.
@@ -5370,10 +7577,6 @@ async def run_competitive_pack(
     for rival in kept:
         name_key = _as_str(rival.name).lower().strip()
         is_baseline = mode == "add" and name_key in baseline_set
-        if (mode == "add" or is_baseline) and not _hard_junk_rival(rival):
-            rival.is_tracking = True
-            filtered_kept.append(rival)
-            continue
         if _hard_junk_rival(rival):
             rival.is_tracking = False
             rival.is_pinned = False
@@ -5390,22 +7593,23 @@ async def run_competitive_pack(
             is_pinned=False,
             strict=(scope == "local"),
         )
-        # Curated seeds for THIS run's selected market always pass (Saudi select → Saudi seeds)
         if (
             not fits
             and scope == "local"
             and scope_market
-            and _looks_like_software_peer_client(client_kind_final)
-            and _is_curated_seed_rival(rival.name, scope_market, kind="software")
+            and _is_curated_seed_rival(rival.name, scope_market)
         ):
             fits = True
-        if fits:
+        if fits or (mode == "add" and scope != "global" and is_baseline):
             filtered_kept.append(rival)
         else:
             rival.is_tracking = False
             rival.is_pinned = False
-    kept = filtered_kept
-    # Also untrack any other auto rivals still marked tracking that failed this run's filter
+    
+    # Deduplicate candidate list
+    kept = collapse_duplicate_competitors(filtered_kept)
+
+    # Also check other active rivals from DB
     all_tracked = (
         await db.execute(
             select(Competitor).where(
@@ -5420,11 +7624,9 @@ async def run_competitive_pack(
         if rival.id in kept_ids_final:
             continue
         name_key = _as_str(rival.name).lower().strip()
-        # add/keep-current: pull baseline rivals back into the list across country/global changes
-        if mode == "add" and name_key in baseline_set and not _hard_junk_rival(rival):
-            rival.is_tracking = True
-            kept.insert(0, rival)
-            kept_ids_final.add(rival.id)
+        if _hard_junk_rival(rival):
+            rival.is_tracking = False
+            rival.is_pinned = False
             continue
         if not _rival_fits_run_scope(
             name=_as_str(rival.name),
@@ -5441,52 +7643,59 @@ async def run_competitive_pack(
             rival.is_tracking = False
             rival.is_pinned = False
             continue
-        if rival.is_pinned:
+        if rival.is_pinned or (mode == "add" and scope != "global" and name_key in baseline_set):
             kept.insert(0, rival)
             kept_ids_final.add(rival.id)
+    
+    kept = collapse_duplicate_competitors(kept)
     kept = sorted(kept, key=lambda c: (1 if c.is_pinned else 0, float(c.overlap_score or 0)), reverse=True)
     pinned_final = [c for c in kept if c.is_pinned]
     others_final = [c for c in kept if not c.is_pinned]
-    if mode == "update":
-        competitors = pinned_final + others_final[: max(0, count - len(pinned_final))]
-    elif mode == "replace":
-        # Untrack extras that survived enrich but exceed the fresh-set size
-        for extra in others_final[count:]:
-            if not extra.is_pinned:
-                extra.is_tracking = False
-        competitors = pinned_final + others_final[:count]
+
+    if mode == "add" and scope != "global":
+        # Keep local baseline rivals and add up to count new rivals
+        baseline_others = [c for c in others_final if _as_str(c.name).lower().strip() in baseline_set]
+        fresh_others = [c for c in others_final if _as_str(c.name).lower().strip() not in baseline_set]
+        active_fresh = fresh_others[:count]
+        active_others = baseline_others + active_fresh
     else:
-        competitors = pinned_final + others_final
-    # Replace: untrack auto rivals not in the fresh set
-    if mode == "replace":
-        final_ids = {c.id for c in competitors}
-        for rival in all_tracked:
-            if rival.is_pinned or rival.id in final_ids:
-                continue
-            rival.is_tracking = False
+        # EXACT SLIDER COUNT: exactly count competitors tracked (pinned first, then highest overlap others)
+        max_others = max(0, count - len(pinned_final))
+        active_others = others_final[:max_others]
+
+    competitors = collapse_duplicate_competitors(pinned_final + active_others)
     from app.services.billing import max_tracked_rivals
 
     rival_cap = max_tracked_rivals(agency)
     if rival_cap is not None and len(competitors) > rival_cap:
-        overflow = competitors[rival_cap:]
         competitors = competitors[:rival_cap]
-        for extra in overflow:
-            extra.is_tracking = False
+
+    final_ids = {c.id for c in competitors}
+    # Synchronize database tracking flags across ALL client competitor rows
+    all_client_rivals = (
+        await db.execute(
+            select(Competitor).where(
+                Competitor.client_id == client.id,
+                Competitor.agency_id == agency.id,
+            )
+        )
+    ).scalars().all()
+    for rival in all_client_rivals:
+        if rival.id in final_ids:
+            rival.is_tracking = True
+        else:
+            rival.is_tracking = False
+            rival.is_pinned = False
+    await db.flush()
+
     if not competitors:
-        is_food = _looks_like_food_client(
+        peer_hint = _client_peer_hint(
             client.name,
             client.industry,
             client.niche,
             _business_model_from_client(client),
             client.notes,
             client.tagline,
-        )
-        peer_hint = (
-            _food_rival_peer_hint(
-                client.name, client.industry, client.niche, client.notes, client.tagline
-            )
-            if is_food
-            else "peer rivals"
         )
         raise ValueError(
             f"No matching {peer_hint} survived this run's filter "
@@ -6190,7 +8399,7 @@ async def run_full_ai_pipeline(
         job.finished_at = datetime.utcnow()
         job.result_meta = result
         job.detail = "Autonomous AI pipeline completed"
-        await db.flush()
+        await db.commit()
         return result
     except Exception as exc:
         job.status = JobStatus.failed

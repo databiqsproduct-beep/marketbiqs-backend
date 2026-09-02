@@ -324,17 +324,21 @@ class LocalSeedTests(unittest.TestCase):
 
     def test_direct_html_scraper_fallback(self):
         import asyncio
+        import httpx
+        from unittest.mock import patch, AsyncMock
         from app.services.tracking import _scrape_direct_html
 
-        # Test against a known standard domain (or invalid domain handling)
-        async def _run():
-            res = await _scrape_direct_html("https://httpbin.org/html")
-            return res
+        class MockResp:
+            status_code = 200
+            url = "https://example.com"
+            text = "<html><head><title>Test Title</title></head><body><h1>Sample Direct HTML</h1><p>Content for testing direct fallback.</p></body></html>"
 
-        res = asyncio.run(_run())
-        self.assertEqual(res.get("status"), "ok")
-        self.assertTrue(bool(res.get("markdown")))
-        self.assertEqual(res.get("source"), "direct_http")
+        with patch.object(httpx.AsyncClient, "get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = MockResp()
+            res = asyncio.run(_scrape_direct_html("https://example.com"))
+            self.assertEqual(res.get("status"), "ok")
+            self.assertTrue(bool(res.get("markdown")))
+            self.assertEqual(res.get("source"), "direct_http")
 
     def test_peer_scale_matching(self):
         from app.services.competitive import (
@@ -400,5 +404,175 @@ class LocalSeedTests(unittest.TestCase):
                 strict=True,
             )
         )
+
+    def test_beauty_brand_detection_and_seeds(self):
+        from app.services.competitive import (
+            _client_peer_hint,
+            _looks_like_beauty_client,
+            _seed_local_beauty_rivals,
+        )
+
+        self.assertTrue(_looks_like_beauty_client("Hifsa Khan", "Beauty & Personal Care", "Beauty salon & makeup studio"))
+        self.assertTrue(_looks_like_beauty_client("Depilex Beauty Clinic"))
+        self.assertTrue(_looks_like_beauty_client("Nabila Salon", "hair styling"))
+        self.assertFalse(_looks_like_beauty_client("Systems Limited", "Software", "IT services"))
+        self.assertFalse(_looks_like_beauty_client("Cheezious", "Fast Food", "Pizza"))
+
+        seeds = _seed_local_beauty_rivals("Pakistan", "Hifsa Khan", limit=8)
+        names = [r["name"] for r in seeds]
+        self.assertIn("Depilex Beauty Clinic", names)
+        self.assertIn("Kashee's Beauty Parlour", names)
+        self.assertIn("Sabs The Salon", names)
+        self.assertIn("Nabila Salon", names)
+        self.assertNotIn("Hifsa Khan", names)
+        self.assertGreaterEqual(len(seeds), 5)
+
+        self.assertEqual(
+            _client_peer_hint("Hifsa Khan", "Beauty & Personal Care", "Beauty salon"),
+            "beauty-salon / makeup-studio rivals",
+        )
+
+    def test_short_beauty_brand_names_not_fake(self):
+        from app.services.competitive import _is_generic_or_fake_rival_name
+
+        self.assertFalse(_is_generic_or_fake_rival_name("Sabs"))
+        self.assertFalse(_is_generic_or_fake_rival_name("MAC"))
+        self.assertFalse(_is_generic_or_fake_rival_name("NARS"))
+        self.assertFalse(_is_generic_or_fake_rival_name("Zara"))
+        self.assertFalse(_is_generic_or_fake_rival_name("Huda"))
+        self.assertFalse(_is_generic_or_fake_rival_name("Depilex"))
+        self.assertTrue(_is_generic_or_fake_rival_name("TechCorp"))
+        self.assertTrue(_is_generic_or_fake_rival_name("Soft Solutions"))
+
+    def test_beauty_incompatible_peer_and_filtering(self):
+        from app.services.competitive import _filter_niche_competitors, _incompatible_peer
+
+        # Beauty client vs beauty rivals: compatible
+        self.assertFalse(
+            _incompatible_peer(
+                client_model="services",
+                client_industry="Beauty & Personal Care",
+                client_niche="Beauty salon & makeup studio",
+                rival_model="services",
+                rival_industry="Beauty & Personal Care",
+                rival_blob="Depilex Beauty Clinic aesthetic skincare and bridal salon",
+                client_name="Hifsa Khan",
+            )
+        )
+        self.assertFalse(
+            _incompatible_peer(
+                client_model="services",
+                client_industry="Beauty & Personal Care",
+                client_niche="Beauty salon & makeup studio",
+                rival_model="services",
+                rival_industry="Beauty & Personal Care",
+                rival_blob="Kashee's Beauty Parlour bridal makeup and beauty products shop",
+                client_name="Hifsa Khan",
+            )
+        )
+
+        # Beauty client vs software house / restaurant: incompatible
+        self.assertTrue(
+            _incompatible_peer(
+                client_model="services",
+                client_industry="Beauty & Personal Care",
+                client_niche="Beauty salon & makeup studio",
+                rival_model="services",
+                rival_industry="Software",
+                rival_blob="Systems Limited commercial software house / digital product firm",
+                client_name="Hifsa Khan",
+            )
+        )
+        self.assertTrue(
+            _incompatible_peer(
+                client_model="services",
+                client_industry="Beauty & Personal Care",
+                client_niche="Beauty salon & makeup studio",
+                rival_model="other",
+                rival_industry="Fast Food",
+                rival_blob="Cheezious pizza and fast food chain",
+                client_name="Hifsa Khan",
+            )
+        )
+
+        # Filter keeps beauty competitors in Pakistan
+        raw_candidates = [
+            {
+                "name": "Depilex Beauty Clinic",
+                "website": "https://depilex.com",
+                "why_relevant": "Leading beauty salon and aesthetic clinic in Pakistan",
+                "industry": "Beauty & Personal Care",
+                "business_model": "services",
+                "overlap_score": 78,
+                "same_niche": True,
+                "source": "ai",
+            },
+            {
+                "name": "Kashee's Beauty Parlour",
+                "website": "https://kashees.com",
+                "why_relevant": "Top bridal makeup salon and aesthetic studio in Pakistan",
+                "industry": "Beauty & Personal Care",
+                "business_model": "services",
+                "overlap_score": 76,
+                "same_niche": True,
+                "source": "ai",
+            },
+            {
+                "name": "Sabs",
+                "website": "https://sabs.com.pk",
+                "why_relevant": "Famous luxury beauty salon chain across Pakistan",
+                "industry": "Beauty & Personal Care",
+                "business_model": "services",
+                "overlap_score": 75,
+                "same_niche": True,
+                "source": "ai",
+            },
+            {
+                "name": "Systems Limited",
+                "website": "https://systemsltd.com",
+                "why_relevant": "Enterprise software development company in Pakistan",
+                "industry": "Software",
+                "business_model": "services",
+                "overlap_score": 80,
+                "same_niche": True,
+                "source": "ai",
+            },
+        ]
+        kept = _filter_niche_competitors(
+            raw_candidates,
+            "Hifsa Khan",
+            market_area="Pakistan",
+            niche="Beauty salon & makeup studio",
+            industry="Beauty & Personal Care",
+            business_model="services",
+            min_overlap=55.0,
+            limit=10,
+            require_local_market=True,
+        )
+        kept_names = [r["name"] for r in kept]
+        self.assertIn("Depilex Beauty Clinic", kept_names)
+        self.assertIn("Kashee's Beauty Parlour", kept_names)
+        self.assertIn("Sabs", kept_names)
+        self.assertNotIn("Systems Limited", kept_names)
+        self.assertEqual(len(kept), 3)
+
+    def test_beauty_serp_queries(self):
+        from types import SimpleNamespace
+        from app.services.competitive import _niche_competitor_queries
+
+        client = SimpleNamespace(
+            name="Hifsa Khan",
+            niche="Beauty salon & makeup studio",
+            industry="Beauty & Personal Care",
+            notes="Business model: services",
+            tagline="Bridal & Beauty",
+            website="https://hifsakhan.com",
+        )
+        local_q = _niche_competitor_queries(client, "Pakistan", scope="local")
+        blob = " ".join(local_q).lower()
+        self.assertTrue(any("beauty" in q.lower() or "salon" in q.lower() for q in local_q), local_q)
+        self.assertNotIn("software house", blob)
+        self.assertNotIn("pizza", blob)
+
 
 
