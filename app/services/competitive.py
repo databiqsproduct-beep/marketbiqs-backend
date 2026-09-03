@@ -6526,14 +6526,21 @@ async def run_competitive_pack(
                     "Global hyperscalers/platforms that are not peer businesses should be low threat, "
                     "same_niche=false, is_global_platform=true. "
                     + (
-                        f"LOCAL MARKET REQUIRED: {required_market}. "
-                        f"Set headquarters_country from SITE EVIDENCE only (not guesses). "
-                        f"If headquarters / primary selling country is clearly NOT {required_market}, "
-                        "set same_market=false and overlap_score below 40. "
-                        "Do not treat neighboring countries (e.g. India vs Pakistan, Singapore vs Pakistan) as the same market. "
-                        "Never invent that a foreign company sells primarily in the required market."
-                        if scope == "local" and required_market
-                        else ""
+                        f"GLOBAL SCOPE: The user specifically requested global/international industry peers and benchmarks. "
+                        "When the rival is a genuine international peer/benchmark in the same industry (e.g. global universities for universities, global tech/software houses for software, global hotel chains for hotels, global gym brands for gyms, etc.), "
+                        "set same_niche=true, same_market=true, is_leading_rival=true, and score overlap high (75-95) regardless of country. "
+                        "Only reject unrelated industries, gig sites (Upwork/Fiverr), or non-peer directories."
+                        if scope == "global"
+                        else (
+                            f"LOCAL MARKET REQUIRED: {required_market}. "
+                            f"Set headquarters_country from SITE EVIDENCE only (not guesses). "
+                            f"If headquarters / primary selling country is clearly NOT {required_market}, "
+                            "set same_market=false and overlap_score below 40. "
+                            "Do not treat neighboring countries (e.g. India vs Pakistan, Singapore vs Pakistan) as the same market. "
+                            "Never invent that a foreign company sells primarily in the required market."
+                            if scope == "local" and required_market
+                            else ""
+                        )
                     )
                 ),
                 json.dumps(
@@ -6644,7 +6651,7 @@ async def run_competitive_pack(
         )
         curated = _is_curated_seed_rival(
             competitor.name,
-            required_market,
+            required_market if scope == "local" else None,
             kind="food" if client_is_food else ("software" if client_is_software_peer else ("beauty" if client_is_beauty else None)),
         )
         client_food_tier = (
@@ -6669,11 +6676,14 @@ async def run_competitive_pack(
                 client_peer_scale == _PEER_BOUTIQUE
                 and (
                     _is_global_food_franchise(competitor.name, competitor.website)
-                    or _is_global_megarival(competitor.name, competitor.website)
-                    or _peer_scale_from_blob(
-                        competitor.name, competitor.description, name=competitor.name, website=competitor.website
+                    or (scope == "local" and _is_global_megarival(competitor.name, competitor.website))
+                    or (
+                        scope == "local"
+                        and _peer_scale_from_blob(
+                            competitor.name, competitor.description, name=competitor.name, website=competitor.website
+                        )
+                        == _PEER_ENTERPRISE
                     )
-                    == _PEER_ENTERPRISE
                 )
             )
         ):
@@ -6730,20 +6740,21 @@ async def run_competitive_pack(
             not competitor.is_pinned
             and (
                 fake_brand
-                or _is_global_megarival(competitor.name, competitor.website)
+                or (scope == "local" and _is_global_megarival(competitor.name, competitor.website))
                 or site_host_noise
-                or (analysis.get("is_global_platform") is True and not curated)
-                or (analysis.get("same_niche") is False and not curated)
+                or (analysis.get("is_global_platform") is True and not curated and scope == "local")
+                or (analysis.get("same_niche") is False and not curated and scope == "local")
                 or (bad_peer and not curated)
                 or wrong_market
                 or dead_site
                 or weak_software_peer
-                or ((competitor.overlap_score or 0) < 50 and not curated)
+                or ((competitor.overlap_score or 0) < 50 and not curated and scope == "local")
                 or (
                     not curated
                     and competitor.threat_level == "low"
                     and (competitor.overlap_score or 0) < 60
                     and analysis.get("is_leading_rival") is False
+                    and scope == "local"
                 )
             )
         )
@@ -6785,7 +6796,11 @@ async def run_competitive_pack(
             continue
 
         competitor.is_tracking = True
-        if competitor.threat_level == "low":
+        if scope == "global":
+            competitor.overlap_score = max(float(competitor.overlap_score or 0), 80.0)
+            if competitor.threat_level not in {"medium", "high"}:
+                competitor.threat_level = "high"
+        elif competitor.threat_level == "low":
             competitor.threat_level = "medium"
         kept.append(competitor)
 
