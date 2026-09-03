@@ -2017,6 +2017,8 @@ def _looks_like_software_peer_client(*parts: object) -> bool:
     blob = _context_blob(*parts)
     if not blob or _looks_like_food_client(blob) or _looks_like_beauty_client(blob):
         return False
+    if re.search(r"\b(data\s+analytics|business\s+intelligence|enterprise\s+ai|conversational\s+ai|data\s+engineering|data\s+science|power\s+bi|tableau|snowflake|databricks|ai\s+solutions|analytics\s+consulting|data\s+consulting|bi\s+consulting|ai\s+consulting)\b", blob):
+        return False
     if any(tok in blob for tok in (
         "bank", "banking", "wallet", "fintech", "payment", "ecommerce", "e-commerce",
         "retail", "hospital", "clinic", "diagnostic", "automotive", "car dealership",
@@ -2026,7 +2028,7 @@ def _looks_like_software_peer_client(*parts: object) -> bool:
     verts = _detect_verticals(blob)
     if "fintech" in verts or "retail" in verts or "healthcare" in verts or "automotive" in verts or "real_estate" in verts:
         return False
-    if "software_services" in verts or "data_ai" in verts:
+    if "software_services" in verts:
         return True
     return any(tok in blob for tok in _SOFTWARE_PEER_TOKENS)
 
@@ -3978,6 +3980,26 @@ def _incompatible_peer(
     client_is_software = _looks_like_software_peer_client(client_l) or bool(client_verticals & peer_verticals)
     rival_is_software = _looks_like_software_peer_client(rival_l) or "software_services" in rival_verticals
 
+    # Data Analytics & Enterprise AI boutiques/consultancies are NOT peers of generic custom software dev / IT staffing giants (Systems Ltd, NetSol, Arbisoft, 10Pearls)
+    if client_cat == "data_ai":
+        is_generic_software_giant = any(
+            tok in rival_l
+            for tok in (
+                "systems limited", "netsol", "10pearls", "arbisoft", "contour software",
+                "purelogics", "nextbridge", "dpl", "pure logics", "ovex", "confiz", "tintash", "devsinc"
+            )
+        )
+        if is_generic_software_giant:
+            return True
+        if rival_cat == "software" and not any(
+            tok in rival_l
+            for tok in (
+                "data", "analytics", "business intelligence", "bi", "machine learning",
+                "artificial intelligence", "ai", "data engineering", "power bi", "tableau", "snowflake", "databricks"
+            )
+        ):
+            return True
+
     # Cross-vertical clashes
     if client_is_beauty and rival_is_beauty:
         return False
@@ -4222,6 +4244,28 @@ def _niche_competitor_queries(
             queries = [
                 f"beauty salons like {client.name}",
                 f"makeup studios competitors {client.name}",
+            ]
+    # Data Analytics, Business Intelligence & AI Solutions
+    elif _detect_industry_category(client.name, niche, client.industry, model) == "data_ai":
+        if is_global:
+            queries = [
+                "top modern data stack and business intelligence consultancies",
+                "leading enterprise AI and data analytics consulting firms",
+                f"data analytics and BI companies similar to {clean_name} worldwide",
+                f"global AI solutions and analytics boutique consultancies like {clean_name}",
+            ]
+        elif geo:
+            queries = [
+                f"top data analytics and business intelligence companies in {geo}",
+                f"AI solutions and data consulting firms in {geo}",
+                f"business intelligence BI consulting companies {geo}",
+                f"enterprise AI automation companies {geo} like {client.name}",
+                f"{client.name} data analytics competitors {geo}",
+            ]
+        else:
+            queries = [
+                f"data analytics and business intelligence companies like {client.name}",
+                f"enterprise AI consulting competitors {client.name}",
             ]
     # Software-house / IT services — only when client is actually software
     elif _looks_like_software_peer_client(client.name, niche, client.industry, model):
@@ -5612,6 +5656,32 @@ async def enrich_client_profile(
                 f"10) {_peer_scale_prompt_rule(_client_scale, is_food=True)}"
                 + (
                     f"\n11) {_brand_geo_disclaimer(client.name, focus)}"
+                    if _brand_geo_disclaimer(client.name, focus)
+                    else ""
+                )
+            )
+        elif _detect_industry_category(client.name, client.niche, client.industry, business_model) == "data_ai":
+            competitor_prompt = (
+                f"Find exactly {count} REAL direct LOCAL competitors for this Data Analytics / AI Solutions consultancy in {focus}. "
+                f"HARD GEO RULE: every competitor MUST be headquartered in OR primarily selling in {focus}. "
+                "They must be specialized Data Analytics, Business Intelligence (BI), Data Engineering, or Enterprise AI consulting firms / agencies. "
+                f"Must-match industry: Data Analytics & Business Intelligence / AI Solutions. "
+                f"Must-match niche: {_as_str(client.niche) or 'Enterprise AI & Data Analytics'}. "
+                f"Must-match business model: {_as_str(business_model) or 'services'}. "
+                f"Return JSON: {{competitors:[{'{'}name, website, industry, business_model, headquarters_country, why_relevant, threat_level, overlap_score, "
+                "same_niche:true, same_market:true, market_overlap, is_global_platform:false{'}'}]}}. "
+                "Hard rules:\n"
+                f"1) Return exactly {count} NEW competitors — not names in already_have.\n"
+                f"2) headquarters_country MUST be {focus} (or a city inside {focus}).\n"
+                f"3) why_relevant MUST mention {focus} and cite their specific Data Analytics, BI, or AI practice.\n"
+                f"4) website MUST be a real working company homepage URL (https://...). No invented domains.\n"
+                "5) STRICTLY EXCLUDE generic custom software / IT staffing giants (Systems Limited, NetSol, Arbisoft, 10Pearls, Contour Software).\n"
+                "6) EXCLUDE global cloud hyperscalers (AWS, Azure, GCP, OpenAI) unless they are consulting partners.\n"
+                "7) EXCLUDE fintech apps, banks, directories, and government IT boards.\n"
+                "8) overlap_score should reflect true peer fit (prefer 75-95).\n"
+                f"9) {_peer_scale_prompt_rule(_client_scale, is_food=False)}"
+                + (
+                    f"\n10) {_brand_geo_disclaimer(client.name, focus)}"
                     if _brand_geo_disclaimer(client.name, focus)
                     else ""
                 )
