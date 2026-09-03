@@ -2764,6 +2764,18 @@ _LOCAL_MULTI_INDUSTRY_SEEDS: dict[str, dict[str, list[dict]]] = {
             {"name": "Avari Hotels", "website": "https://www.avari.com", "industry": "Hospitality & Hotels", "niche": "luxury hospitality & hotel suites"},
             {"name": "Nishat Hotel", "website": "https://nishathotel.com", "industry": "Hospitality & Hotels", "niche": "boutique luxury hotel & hospitality"},
         ],
+        "data_ai": [
+            {"name": "Avanza Solutions", "website": "https://www.avanzasolutions.com", "industry": "Data & AI Solutions", "niche": "enterprise AI, analytics & intelligent automation"},
+            {"name": "VentureDive", "website": "https://www.venturedive.com", "industry": "AI & Analytics", "niche": "AI solutions, data analytics & engineering"},
+            {"name": "Algo", "website": "https://algo.com", "industry": "AI Consulting", "niche": "supply chain intelligence, AI & data science consulting"},
+            {"name": "Datakulture", "website": "https://datakulture.com", "industry": "Data Analytics", "niche": "business intelligence, Power BI & modern data stack"},
+            {"name": "Inspirata Analytics", "website": "https://inspiratadata.com", "industry": "Data Analytics & BI", "niche": "data engineering, reporting dashboards & analytics consulting"},
+            {"name": "CodeLoop", "website": "https://codeloop.io", "industry": "AI & Data Solutions", "niche": "conversational AI, LLM automation & analytics"},
+            {"name": "Emumba", "website": "https://emumba.com", "industry": "Data & Analytics", "niche": "data analytics, modern dashboards & AI engineering"},
+            {"name": "Techlogix", "website": "https://www.techlogix.com", "industry": "Enterprise Analytics", "niche": "business intelligence, data management & analytics solutions"},
+            {"name": "QBatch", "website": "https://qbatch.com", "industry": "Data & AI Consulting", "niche": "AI solutions, predictive analytics & data engineering"},
+            {"name": "Xavor Corporation", "website": "https://www.xavor.com", "industry": "Analytics & AI", "niche": "AI automation, predictive analytics & BI consulting"},
+        ],
     },
     "uae": {
         "automotive": [
@@ -2831,6 +2843,13 @@ _LOCAL_MULTI_INDUSTRY_SEEDS: dict[str, dict[str, list[dict]]] = {
             {"name": "Atlantis The Palm", "website": "https://www.atlantis.com/dubai", "industry": "Hospitality & Hotels", "niche": "luxury ocean resort & entertainment destination"},
             {"name": "Rotana Hotels", "website": "https://www.rotana.com", "industry": "Hospitality & Hotels", "niche": "hotel management & premium suites"},
         ],
+        "data_ai": [
+            {"name": "DataBridge UAE", "website": "https://databridge.ae", "industry": "Data Analytics", "niche": "business intelligence & data analytics consulting"},
+            {"name": "Data Insight Middle East", "website": "https://datainsight.me", "industry": "Data & BI", "niche": "Power BI, data warehouse & analytics consulting"},
+            {"name": "DataLab UAE", "website": "https://datalab.ae", "industry": "AI & Data Solutions", "niche": "enterprise AI, analytics & data engineering"},
+            {"name": "Inovar Consulting", "website": "https://inovarconsulting.com", "industry": "Data Analytics", "niche": "BI consulting, Tableau & data strategy"},
+            {"name": "Brite Solutions", "website": "https://britesolutions.ae", "industry": "BI & Analytics", "niche": "business intelligence dashboards & data architecture"},
+        ],
     },
     "saudi arabia": {
         "automotive": [
@@ -2892,6 +2911,12 @@ _LOCAL_MULTI_INDUSTRY_SEEDS: dict[str, dict[str, list[dict]]] = {
         "hospitality": [
             {"name": "Dur Hospitality", "website": "https://dur.sa", "industry": "Hospitality & Hotels", "niche": "hotel operations, residential compounds & hospitality"},
             {"name": "Al Khozama", "website": "https://alkhozama.com", "industry": "Hospitality & Hotels", "niche": "luxury hospitality & hotel properties"},
+        ],
+        "data_ai": [
+            {"name": "Elm Data & AI", "website": "https://www.elm.sa", "industry": "Data & AI Solutions", "niche": "digital intelligence, government analytics & AI"},
+            {"name": "Quant Data & Analytics", "website": "https://quant.sa", "industry": "Data & Analytics", "niche": "data science, business intelligence & analytics products"},
+            {"name": "Mozn AI", "website": "https://mozn.ai", "industry": "Enterprise AI", "niche": "AI solutions, risk intelligence & natural language processing"},
+            {"name": "Lucidya", "website": "https://lucidya.com", "industry": "AI & Analytics", "niche": "AI-powered customer intelligence & analytics platform"},
         ],
     },
     "united kingdom": {
@@ -2962,6 +2987,12 @@ _LOCAL_MULTI_INDUSTRY_SEEDS: dict[str, dict[str, list[dict]]] = {
             {"name": "Premier Inn", "website": "https://www.premierinn.com", "industry": "Hospitality & Hotels", "niche": "hotel chain & comfortable stays"},
             {"name": "Travelodge UK", "website": "https://www.travelodge.co.uk", "industry": "Hospitality & Hotels", "niche": "budget hotel chain & accommodation"},
             {"name": "InterContinental Hotels Group", "website": "https://www.ihg.com", "industry": "Hospitality & Hotels", "niche": "global luxury hotel & resort brands"},
+        ],
+        "data_ai": [
+            {"name": "Thorogood", "website": "https://www.thorogood.com", "industry": "Data & Analytics Consulting", "niche": "business intelligence, advanced analytics & AI strategy"},
+            {"name": "Keyrus UK", "website": "https://keyrus.co.uk", "industry": "Data Intelligence", "niche": "data intelligence, cloud analytics & BI consulting"},
+            {"name": "Kubrick Group", "website": "https://kubrickgroup.com", "industry": "Data & AI Consulting", "niche": "data engineering, machine learning & analytics advisory"},
+            {"name": "Peak AI", "website": "https://peak.ai", "industry": "Enterprise AI", "niche": "decision intelligence & commercial AI platform"},
         ],
     },
     "united states": {
@@ -3056,6 +3087,16 @@ _LOCAL_MULTI_INDUSTRY_SEEDS: dict[str, dict[str, list[dict]]] = {
             {"name": "Hilton Hotels & Resorts", "website": "https://www.hilton.com", "industry": "Hospitality & Hotels", "niche": "global hotel hospitality & luxury suites"},
             {"name": "Hyatt Hotels", "website": "https://www.hyatt.com", "industry": "Hospitality & Hotels", "niche": "hospitality management, luxury hotels & resorts"},
             {"name": "Wyndham Hotels & Resorts", "website": "https://www.wyndhamhotels.com", "industry": "Hospitality & Hotels", "niche": "hotel franchise & hospitality chains"},
+        ],
+        "data_ai": [
+            {"name": "Aimpoint Digital", "website": "https://aimpointdigital.com", "industry": "Data & AI Consulting", "niche": "modern data stack, AI automation & analytics advisory"},
+            {"name": "Keyrus", "website": "https://keyrus.com", "industry": "Data & BI Consulting", "niche": "data intelligence, cloud analytics & BI consulting"},
+            {"name": "PhData", "website": "https://www.phdata.io", "industry": "Data & AI Services", "niche": "Snowflake, Databricks & AI automation consulting"},
+            {"name": "Caserta", "website": "https://caserta.com", "industry": "Data Architecture & AI", "niche": "data strategy, analytics engineering & modern AI"},
+            {"name": "DAS42", "website": "https://das42.com", "industry": "Data & BI Consulting", "niche": "full-stack data analytics & modern business intelligence"},
+            {"name": "Analytics8", "website": "https://www.analytics8.com", "industry": "Data Analytics Consulting", "niche": "data strategy, business intelligence & data engineering"},
+            {"name": "Blend360", "website": "https://www.blend360.com", "industry": "Data Science & AI", "niche": "data science solutions, predictive analytics & enterprise AI"},
+            {"name": "Tiger Analytics", "website": "https://www.tigeranalytics.com", "industry": "AI & Analytics Consulting", "niche": "enterprise AI, machine learning & business analytics"},
         ],
     },
     "india": {
@@ -3338,10 +3379,13 @@ def _detect_industry_category(*parts: object) -> str:
     # 12. Healthcare
     if re.search(r"\b(hospitals?|clinics?|pharma(cy)?|pharmaceutical|medical|diagnostic|healthcare|chughtai|shaukat\s+khanum)\b", blob):
         return "healthcare"
-    # 13. Software / IT / SaaS / Data / BI / AI
-    if _looks_like_software_peer_client(blob) or re.search(r"\b(software|saas|it\s+services|digital\s+agency|business\s+intelligence|data\s+analytics|it\s+consulting|artificial\s+intelligence|machine\s+learning|data\s+science|enterprise\s+ai|analytics)\b", blob):
+    # 13. Data Analytics, Business Intelligence & AI Solutions (separate from generic custom software)
+    if re.search(r"\b(data\s+analytics|business\s+intelligence|enterprise\s+ai|conversational\s+ai|data\s+engineering|data\s+science|power\s+bi|tableau|snowflake|databricks|ai\s+solutions|analytics\s+consulting|data\s+consulting|bi\s+consulting|ai\s+consulting)\b", blob):
+        return "data_ai"
+    # 14. Software / IT / SaaS / Custom Software Development
+    if _looks_like_software_peer_client(blob) or re.search(r"\b(software|saas|it\s+services|digital\s+agency|it\s+consulting|artificial\s+intelligence|machine\s+learning|custom\s+software|web\s+development|mobile\s+apps?)\b", blob):
         return "software"
-    # 14. Retail & E-Commerce
+    # 15. Retail & E-Commerce
     if re.search(r"\b(e-?commerce|retail|apparels?|fashions?|clothings?|shopping|daraz|khaadi|sapphire|flipkart|amazon)\b", blob):
         return "retail"
     return "other"
@@ -3443,7 +3487,7 @@ def _seed_global_industry_rivals(
                 seeds.append((g_key, s))
 
     # 3. Software clients: pull from global SaaS & international software catalogs
-    elif cat == "software" or _looks_like_software_peer_client(client_name, client_niche, industry):
+    elif (cat == "software" or _looks_like_software_peer_client(client_name, client_niche, industry)) and cat != "data_ai":
         for s in _GLOBAL_SOFTWARE_SEEDS:
             seeds.append(("global", s))
         for g_key in ("united states", "united kingdom", "canada", "germany", "singapore", "australia"):
