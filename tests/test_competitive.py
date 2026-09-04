@@ -22,7 +22,7 @@ class LocalSeedTests(unittest.TestCase):
         )
         names = [row["name"] for row in seeds]
         self.assertNotIn("Systems Limited", names)
-        self.assertIn("NetSol Technologies", names)
+        self.assertIn("Devsinc", names)
         self.assertGreaterEqual(len(seeds), 5)
 
     def test_food_brand_is_not_software_peer(self):

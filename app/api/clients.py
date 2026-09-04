@@ -171,10 +171,13 @@ async def add_competitor(
         await db.flush()
         await db.refresh(competitor)
         return competitor
+    from app.services.competitive import _market_area_from_client
+    client_mkt = _market_area_from_client(client) or "Pakistan"
     competitor = Competitor(
         agency_id=ctx.agency.id,
         client_id=client.id,
         **data,
+        headquarters=data.get("headquarters") or client_mkt,
         # Keep manual rivals in intel runs (protected from AI prune + count slice)
         is_tracking=True,
         is_pinned=True,
