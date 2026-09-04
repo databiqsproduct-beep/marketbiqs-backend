@@ -62,7 +62,7 @@ def _agency_for_mode(name: str, slug: str, workspace_mode: str) -> Agency:
 
 
 async def _unique_agency_slug(db: AsyncSession, agency_name: str) -> str:
-    base_slug = slugify(agency_name)
+    base_slug = slugify(agency_name) or "agency"
     slug = base_slug
     i = 1
     while (await db.execute(select(Agency).where(Agency.slug == slug))).scalar_one_or_none():
