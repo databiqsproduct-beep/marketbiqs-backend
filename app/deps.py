@@ -57,13 +57,22 @@ async def _ensure_user_row(
     # Fresh Auth user — claim email if a legacy row still holds it.
     legacy = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
     if legacy and legacy.id != user_id:
-        memberships = (
-            await db.execute(select(AgencyMember).where(AgencyMember.user_id == legacy.id))
-        ).scalars().all()
-        for membership in memberships:
-            membership.user_id = user_id
-        await db.delete(legacy)
-        await db.flush()
+        try:
+            async with db.begin_nested():
+                memberships = (
+                    await db.execute(select(AgencyMember).where(AgencyMember.user_id == legacy.id))
+                ).scalars().all()
+                for membership in memberships:
+                    membership.user_id = user_id
+                await db.delete(legacy)
+                await db.flush()
+        except Exception:
+            # If foreign key constraints prevent delete, rename legacy email so new user can insert
+            try:
+                legacy.email = f"archived_{legacy.id[:8]}_{email}"
+                await db.flush()
+            except Exception:
+                pass
         user = await db.get(User, user_id)
         if user:
             return user
@@ -80,7 +89,7 @@ async def _ensure_user_row(
         async with db.begin_nested():
             db.add(user)
             await db.flush()
-    except IntegrityError:
+    except Exception:
         # Parallel /api/auth/me (or bootstrap) already inserted this Auth user.
         existing = await db.get(User, user_id)
         if existing:

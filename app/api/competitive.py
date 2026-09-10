@@ -715,7 +715,11 @@ async def client_workspace(
         _food_format_compatible,
         _is_generic_or_fake_rival_name,
         _is_self_rival,
+        _is_curated_seed_rival,
         _market_area_from_client,
+        _looks_like_content_or_cpg_noise,
+        _is_blog_or_article_url,
+        _is_serp_noise_domain,
     )
 
     # Instantly hide brand-geo hallucinations + wrong food-format / wrong-vertical peers
@@ -741,6 +745,8 @@ async def client_workspace(
         else ""
     )
     for rival in dirty:
+        if rival.is_pinned or _is_curated_seed_rival(rival.name, market_hint):
+            continue
         drop = _looks_like_brand_geo_hallucination(
             client.name,
             rival.name,
@@ -762,6 +768,9 @@ async def client_workspace(
             _is_generic_or_fake_rival_name(rival.name)
             or _looks_like_invented_food_domain(rival.name, rival.website)
             or _is_self_rival(client.name, rival.name, website=rival.website, client_website=client.website)
+            or _looks_like_content_or_cpg_noise(rival.name, rival.website)
+            or _is_blog_or_article_url(rival.website or "", rival.name)
+            or _is_serp_noise_domain(rival.website or "")
         ):
             drop = True
         if not drop and client_is_food:
@@ -779,7 +788,8 @@ async def client_workspace(
                 rival.name, rival.description, rival.why_dangerous, rival.website
             ) or _looks_like_marketing_slogan_name(rival.name):
                 drop = True
-            elif _incompatible_peer(
+        if not drop:
+            if _incompatible_peer(
                 client_model=client_model,
                 client_industry=client.industry or "",
                 client_niche=(client.niche or client.notes or ""),

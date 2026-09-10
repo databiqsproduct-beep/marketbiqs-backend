@@ -16,13 +16,19 @@ from app.security import decrypt_secret
 settings = get_settings()
 logger = logging.getLogger("marketbiqs.ai")
 
-# Groq retired llama-3.3-70b-versatile on 2026-08-16.
-_DEFAULT_GROQ_MODELS = ("openai/gpt-oss-120b", "qwen/qwen3.6-27b")
+_DEFAULT_GROQ_MODELS = (
+    "groq/compound-mini",
+    "groq/compound",
+    "qwen/qwen3.6-27b",
+    "qwen/qwen3.8-27b",
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+)
 FALLBACK_PREFIX = "Competitive intelligence briefing prepared from available workspace data."
 # Reasoning models burn completion budget on hidden "thinking" — leave headroom for JSON.
 _GROQ_MAX_TOKENS = 4096
-# After TPM 429, skip further Groq calls for this agency until cooldown (stops stampede).
-_agency_groq_cooldown_until: dict[str, float] = {}
+# After TPM 429, skip further calls for that specific model/agency until cooldown.
+_model_groq_cooldown_until: dict[tuple[str, str], float] = {}
 _RATE_LIMIT_COOLDOWN_CAP_S = 45.0
 
 
@@ -64,14 +70,15 @@ def _retry_after_seconds(exc: BaseException) -> float:
     return 25.0
 
 
-def _set_agency_cooldown(agency_id: str, seconds: float) -> None:
+def _set_model_cooldown(agency_id: str, model: str, seconds: float) -> None:
     until = time.monotonic() + max(1.0, min(seconds, _RATE_LIMIT_COOLDOWN_CAP_S))
-    prev = _agency_groq_cooldown_until.get(agency_id, 0.0)
-    _agency_groq_cooldown_until[agency_id] = max(prev, until)
+    key = (agency_id, model)
+    prev = _model_groq_cooldown_until.get(key, 0.0)
+    _model_groq_cooldown_until[key] = max(prev, until)
 
 
-def _agency_in_cooldown(agency_id: str) -> bool:
-    until = _agency_groq_cooldown_until.get(agency_id, 0.0)
+def _model_in_cooldown(agency_id: str, model: str) -> bool:
+    until = _model_groq_cooldown_until.get((agency_id, model), 0.0)
     return time.monotonic() < until
 
 
@@ -133,13 +140,6 @@ async def chat_completion(
     *,
     json_mode: bool = False,
 ) -> str:
-    if _agency_in_cooldown(agency_id):
-        logger.warning(
-            "Groq cooldown active for agency=%s — skipping call (use Serp/seeds)",
-            agency_id,
-        )
-        return _fallback_text(system, user)
-
     api_key = await resolve_groq_key(db, agency_id)
     client = _async_client(api_key)
     if not client:
@@ -148,8 +148,8 @@ async def chat_completion(
     messages = _normalize_messages(system, user, history)
     last_exc: Exception | None = None
     for model in _chat_models():
-        if _agency_in_cooldown(agency_id):
-            break
+        if _model_in_cooldown(agency_id, model):
+            continue
         try:
             kwargs: dict[str, Any] = {
                 "model": model,
@@ -164,7 +164,7 @@ async def chat_completion(
             if content:
                 return content
             logger.warning(
-                "Groq returned empty content for agency=%s model=%s (reasoning may have used the budget)",
+                "Groq returned empty content for agency=%s model=%s",
                 agency_id,
                 model,
             )
@@ -172,16 +172,13 @@ async def chat_completion(
             last_exc = exc
             if _is_rate_limited(exc):
                 wait_s = _retry_after_seconds(exc)
-                _set_agency_cooldown(agency_id, wait_s)
+                _set_model_cooldown(agency_id, model, wait_s)
                 logger.warning(
-                    "Groq model %s rate-limited for agency=%s; cooldown %.1fs (no sleep — Serp/seeds fill)",
+                    "Groq model %s rate-limited for agency=%s (cooldown %.1fs); trying fallback model",
                     model,
                     agency_id,
                     wait_s,
                 )
-                # Do NOT asyncio.sleep here — it freezes the intel worker and the UI
-                # hits the 45s fetch timeout ("Request timed out"). Cooldown skips
-                # further Groq calls until TPM recovers; discovery uses Serp/seeds.
                 continue
             if _is_missing_model(exc):
                 logger.warning(
@@ -210,17 +207,15 @@ async def chat_completion(
                 except Exception as exc2:
                     last_exc = exc2
                     if _is_rate_limited(exc2):
-                        _set_agency_cooldown(agency_id, _retry_after_seconds(exc2))
+                        _set_model_cooldown(agency_id, model, _retry_after_seconds(exc2))
                         continue
                     if _is_missing_model(exc2):
                         continue
-                    logger.exception("Groq chat_completion failed for agency=%s: %s", agency_id, exc2)
+                    logger.exception("Groq chat_completion failed for agency=%s model=%s: %s", agency_id, model, exc2)
                     continue
             else:
-                logger.exception("Groq chat_completion failed for agency=%s: %s", agency_id, exc)
-                continue
-    if last_exc and not _is_rate_limited(last_exc):
-        logger.exception("Groq chat_completion failed for agency=%s: %s", agency_id, last_exc)
+                logger.exception("Groq chat_completion failed for agency=%s model=%s: %s", agency_id, model, exc)
+    logger.warning("All Groq models failed or rate-limited for agency=%s: %s", agency_id, last_exc)
     return _fallback_text(system, user)
 
 
