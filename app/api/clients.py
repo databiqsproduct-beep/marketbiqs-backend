@@ -107,9 +107,9 @@ async def delete_client(
     ctx: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    client.is_active = False
+    await db.delete(client)
     await db.flush()
-    return {"ok": True}
+    return {"ok": True, "deleted_id": client.id}
 
 
 @router.get("/{client_id}/competitors", response_model=list[CompetitorOut])

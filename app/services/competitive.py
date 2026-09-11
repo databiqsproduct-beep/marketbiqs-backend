@@ -367,8 +367,8 @@ def _extract_features_from_markdown(markdown: str, limit: int = 12) -> list[dict
 _FEATURE_DESC_PROMPT = (
     "For each feature, write a plain-English description a non-technical agency user can understand. "
     "Rules for every description:\n"
-    "1) Exactly 2–3 short sentences.\n"
-    "2) Explain what the customer gets / what problem it solves — not buzzwords.\n"
+    "1) Exactly 2 to 3 short sentences.\n"
+    "2) Explain what the customer gets / what problem it solves, not buzzwords.\n"
     "3) Avoid jargon like production-grade, demoware, architecture-first, hyperscale, MLOps, "
     "unless you immediately explain it in everyday words.\n"
     "4) Do not repeat only the feature name. Do not write marketing slogans.\n"
@@ -398,8 +398,8 @@ def _fallback_plain_feature_description(name: str, category: str, description: s
     raw = _as_str(description).strip()
     soft = raw or name
     replacements = (
-        ("production-grade ai, not demoware", "AI that is ready for real day-to-day business use — not just a flashy demo"),
-        ("production grade ai, not demoware", "AI that is ready for real day-to-day business use — not just a flashy demo"),
+        ("production-grade ai, not demoware", "AI that is ready for real day-to-day business use, not just a flashy demo"),
+        ("production grade ai, not demoware", "AI that is ready for real day-to-day business use, not just a flashy demo"),
         ("production-grade", "ready for real day-to-day business use"),
         ("demoware", "a demo that looks good but is not ready for real work"),
         ("architecture-first thinking", "planning the system carefully before building anything"),
@@ -425,7 +425,7 @@ def _fallback_plain_feature_description(name: str, category: str, description: s
     return (
         f"{name} is something {client_name or 'this brand'} already offers{cat_bit}. "
         f"In simple terms, {mid}{'' if mid.endswith('.') else '.'} "
-        f"This is part of their current offering — not a future idea."
+        f"This is part of their current offering (not a future idea)."
     )
 
 

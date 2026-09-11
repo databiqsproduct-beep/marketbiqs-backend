@@ -91,12 +91,12 @@ def _fallback_report(
             "bullets": (
                 lagging_items[:6]
                 or [
-                    "No structured gap rows yet — run intel again once rival pages are reachable.",
+                    "No structured gap rows yet. Run intel again once rival pages are reachable.",
                 ]
             )
             + [
                 *(
-                    [f"Alert: {a.title} — {a.action}" for a in alerts[:4]]
+                    [f"Alert: {a.title}: {a.action}" for a in alerts[:4]]
                     if alerts
                     else ["No open specialty alerts this run."]
                 )
@@ -319,7 +319,7 @@ async def generate_client_report(
     report = Report(
         agency_id=agency.id,
         client_id=client.id,
-        title=f"{client.name} — {period_label} Intelligence Report",
+        title=f"{client.name}: {period_label} Intelligence Report",
         period_label=period_label,
         status="ready",
         summary=str(summary).strip(),
