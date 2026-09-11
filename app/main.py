@@ -239,6 +239,8 @@ app.include_router(whitelabel.router, prefix="/api")
 app.include_router(supabase_api.router, prefix="/api")
 
 
+
+
 @app.get("/health")
 async def health():
     """Fast liveness for Railway. Deep checks live under /health/ready."""
