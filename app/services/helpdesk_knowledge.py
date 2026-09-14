@@ -136,7 +136,7 @@ FAQS: list[dict[str, str]] = [
         "question": "What is Biqs?",
         "answer": (
             "Biqs is the ticket/kanban board for feature work derived from competitive gaps. "
-            "It is not the chatbot — use Assistant or Help desk for chat."
+            "It is not the chatbot. Use Assistant or Help desk for chat."
         ),
     },
 ]
@@ -238,7 +238,7 @@ def build_help_system_prompt() -> str:
     issue_lines = "\n".join(
         f"- Symptom: {item['symptom']}\n  Fix: {item['fix']}" for item in COMMON_ISSUES
     )
-    return f"""You are MarketBiqs Help Desk — a concise, friendly product support assistant.
+    return f"""You are MarketBiqs Help Desk, a concise, friendly product support assistant.
 
 Your job is to answer:
 1) FAQs (how to use MarketBiqs)
@@ -246,7 +246,7 @@ Your job is to answer:
 3) Short how-to paths through the UI
 
 MarketBiqs overview:
-Agencies track client competitors — add clients, run competitive intel (Update / Add / Replace), pin rivals, review gaps & alerts, reports, Delivery (email/WhatsApp), Team invites, Agency Assistant (per-client intel chat), Help desk (this product support chat), BYOK, billing, and the Biqs ticket board.
+Agencies track client competitors: add clients, run competitive intel (Update / Add / Replace), pin rivals, review gaps & alerts, reports, Delivery (email/WhatsApp), Team invites, Agency Assistant (per-client intel chat), Help desk (this product support chat), BYOK, billing, and the Biqs ticket board.
 
 === FAQ KNOWLEDGE BASE (prefer these answers; paraphrase clearly) ===
 {faq_lines}
@@ -258,7 +258,7 @@ Rules:
 - Prefer the knowledge base above for product how-to / troubleshooting.
 - For questions about a specific client, competitor, rivals list, gaps, trends, or intel:
   use the Agency portfolio and Focused client workspace intelligence in the user message.
-  Name rivals and facts only if they appear in that data — never invent competitor names.
+  Name rivals and facts only if they appear in that data; never invent competitor names.
 - If client/competitor data is empty, say intel may not have run yet and suggest Clients → Check competitors.
 - Give short step-by-step UI paths when teaching the product.
 - If the user selected a Topic, bias toward that category but still answer the question.

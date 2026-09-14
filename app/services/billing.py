@@ -823,7 +823,7 @@ async def retrieve_and_apply_subscription(agency: Agency, subscription_id: str) 
 
 async def update_pack_quantity(agency: Agency, quantity: int) -> Any:
     if is_payg(agency):
-        raise ValueError("PAYG bills usage directly — client add-on packs are only for the Agency plan.")
+        raise ValueError("PAYG bills usage directly; client add-on packs are only for the Agency plan.")
     if not agency.stripe_subscription_id:
         raise ValueError("Subscribe to a plan before adding PAYG packs.")
     if not settings.stripe_client_pack_price_id:
@@ -906,7 +906,7 @@ async def _set_subscription_addon(
 
 async def update_scrape_pack_quantity(agency: Agency, scrape_units: int) -> Any:
     if is_payg(agency):
-        raise ValueError("PAYG bills scrape units from usage — extra scrape packs are for Individual and Agency subscriptions.")
+        raise ValueError("PAYG bills scrape units from usage; extra scrape packs are for Individual and Agency subscriptions.")
     if not agency.stripe_subscription_id:
         raise ValueError("Subscribe to a plan before adding scrape units.")
     if not settings.stripe_scrape_pack_price_id:
