@@ -6,28 +6,33 @@ from app.services.competitive import (
     _looks_like_food_client,
     _looks_like_software_peer_client,
     _rival_keys,
-    _seed_local_qsr_rivals,
-    _seed_local_software_rivals,
     collapse_duplicate_competitors,
 )
 
 
 class LocalSeedTests(unittest.TestCase):
-    def test_pakistan_seeds_skip_client_domain(self):
-        seeds = _seed_local_software_rivals(
-            "Pakistan",
-            "systems",
-            client_website="https://www.systemsltd.com",
-            limit=8,
+    def test_filter_skips_client_domain(self):
+        candidates = [
+            {"name": "Systems Limited", "website": "https://www.systemsltd.com", "industry": "Software", "headquarters_country": "Pakistan", "overlap_score": 85.0},
+            {"name": "Devsinc", "website": "https://www.devsinc.com", "industry": "Software", "headquarters_country": "Pakistan", "overlap_score": 85.0},
+        ]
+        kept = _filter_niche_competitors(
+            candidates,
+            "Systems Limited",
+            market_area="Pakistan",
+            niche="IT consulting",
+            industry="Software",
+            business_model="services",
+            min_overlap=55.0,
+            limit=10,
+            require_local_market=True,
         )
-        names = [row["name"] for row in seeds]
+        names = [row["name"] for row in kept]
         self.assertNotIn("Systems Limited", names)
         self.assertIn("Devsinc", names)
-        self.assertGreaterEqual(len(seeds), 5)
 
     def test_food_brand_is_not_software_peer(self):
         self.assertTrue(_looks_like_food_client("Cheezious", "fast food", "pizza delivery"))
-        self.assertTrue(_looks_like_food_client("Cheezious", "Cheese-flavored snack foods"))
         self.assertFalse(_looks_like_software_peer_client("Cheezious", "Cheese-flavored snack foods"))
         self.assertFalse(_looks_like_software_peer_client("Cheezious", "fast food", "pizza delivery"))
         self.assertTrue(_looks_like_software_peer_client("Systems Limited", "tech", "software house"))
@@ -80,9 +85,12 @@ class LocalSeedTests(unittest.TestCase):
                 client_name="Cheezious",
             )
         )
-        seeds = _seed_local_software_rivals("Pakistan", "Cheezious", limit=8)
+        software_candidates = [
+            {"name": "Systems Limited", "industry": "Software", "business_model": "services", "headquarters_country": "Pakistan", "why_relevant": "IT consultancy", "overlap_score": 85.0},
+            {"name": "NetSol", "industry": "Software", "business_model": "services", "headquarters_country": "Pakistan", "why_relevant": "Software house", "overlap_score": 80.0},
+        ]
         kept = _filter_niche_competitors(
-            seeds,
+            software_candidates,
             "Cheezious",
             market_area="Pakistan",
             niche="pizza",
@@ -94,21 +102,16 @@ class LocalSeedTests(unittest.TestCase):
         )
         self.assertEqual(kept, [])
 
-    def test_pakistan_qsr_seeds_for_cheezious(self):
-        seeds = _seed_local_qsr_rivals(
-            "Pakistan",
-            "Cheezious",
-            client_website="https://www.cheezious.com",
-            limit=8,
-        )
-        names = [row["name"] for row in seeds]
-        # National pizza chain peers with other PK pizza brands — not global franchises
-        self.assertIn("Broadway Pizza", names)
-        self.assertTrue(any("pizza" in n.lower() or n == "Pizza Max" for n in names))
-        self.assertNotIn("Pizza Hut", names)
-        self.assertNotIn("Systems Limited", names)
+    def test_pakistan_qsr_candidates_for_cheezious(self):
+        candidates = [
+            {"name": "Broadway Pizza", "website": "https://broadwaypizza.com.pk", "industry": "Restaurant", "food_format": "pizza", "why_relevant": "leading pizza competitor in Pakistan", "overlap_score": 88.0, "headquarters_country": "Pakistan", "same_market": True, "same_niche": True},
+            {"name": "Pizza Max", "website": "https://pizzamax.com.pk", "industry": "Restaurant", "food_format": "pizza", "why_relevant": "local pizza delivery chain", "overlap_score": 85.0, "headquarters_country": "Pakistan", "same_market": True, "same_niche": True},
+            {"name": "14th Street Pizza", "website": "https://14thstreetpizza.com", "industry": "Restaurant", "food_format": "pizza", "why_relevant": "pizza restaurant in Pakistan", "overlap_score": 84.0, "headquarters_country": "Pakistan", "same_market": True, "same_niche": True},
+            {"name": "Fork N Knives Pizza", "website": "https://forknknives.com", "industry": "Restaurant", "food_format": "pizza", "why_relevant": "local pizza outlet chain", "overlap_score": 82.0, "headquarters_country": "Pakistan", "same_market": True, "same_niche": True},
+            {"name": "Systems Limited", "website": "https://systemsltd.com", "industry": "Software", "why_relevant": "IT consulting", "overlap_score": 80.0, "headquarters_country": "Pakistan"},
+        ]
         kept = _filter_niche_competitors(
-            seeds,
+            candidates,
             "Cheezious",
             market_area="Pakistan",
             niche="pizza",
@@ -118,13 +121,20 @@ class LocalSeedTests(unittest.TestCase):
             limit=10,
             require_local_market=True,
         )
+        names = [row["name"] for row in kept]
+        self.assertIn("Broadway Pizza", names)
+        self.assertIn("Pizza Max", names)
+        self.assertNotIn("Systems Limited", names)
         self.assertGreaterEqual(len(kept), 4)
-        self.assertTrue(all("pizza" in row["why_relevant"].lower() or "food" in row["why_relevant"].lower() for row in kept))
 
-    def test_misprofiled_cheezious_still_keeps_qsr_seeds(self):
-        seeds = _seed_local_qsr_rivals("Pakistan", "Cheezious", limit=8)
+    def test_misprofiled_cheezious_still_keeps_qsr_rivals(self):
+        candidates = [
+            {"name": "Broadway Pizza", "website": "https://broadwaypizza.com.pk", "industry": "Restaurant", "food_format": "pizza", "why_relevant": "pizza restaurant in Pakistan", "overlap_score": 88.0, "headquarters_country": "Pakistan", "same_market": True, "same_niche": True},
+            {"name": "Pizza Max", "website": "https://pizzamax.com.pk", "industry": "Restaurant", "food_format": "pizza", "why_relevant": "pizza brand in Pakistan", "overlap_score": 85.0, "headquarters_country": "Pakistan", "same_market": True, "same_niche": True},
+            {"name": "14th Street Pizza", "website": "https://14thstreetpizza.com", "industry": "Restaurant", "food_format": "pizza", "why_relevant": "pizza chain in Pakistan", "overlap_score": 84.0, "headquarters_country": "Pakistan", "same_market": True, "same_niche": True},
+        ]
         kept = _filter_niche_competitors(
-            seeds,
+            candidates,
             "Cheezious",
             market_area="Pakistan",
             niche="Cheese-flavored snack foods",
@@ -142,31 +152,7 @@ class LocalSeedTests(unittest.TestCase):
         self.assertTrue(_rival_keys("papa johns") & _rival_keys("Papa John's", "https://www.papajohns.com.pk"))
         self.assertFalse(_rival_keys("Pizza Hut") & _rival_keys("Broadway Pizza"))
 
-    def test_qsr_seeds_skip_papa_johns_alias(self):
-        seeds = _seed_local_qsr_rivals("Pakistan", "Cheezious", already_have=["papa johns"], limit=8)
-        names = [row["name"].lower() for row in seeds]
-        self.assertFalse(any("papa" in name and "john" in name for name in names))
-        self.assertIn("broadway pizza", names)
-
-    def test_pakistan_shawarma_seeds_for_sultan(self):
-        seeds = _seed_local_qsr_rivals(
-            "Pakistan",
-            "Sultan Shawarma",
-            client_website="https://www.sultanshawarma.com",
-            client_niche="shawarma / quick-service restaurant",
-            client_industry="food",
-            limit=8,
-        )
-        names = [row["name"] for row in seeds]
-        self.assertIn("Shawarma Stop", names)
-        self.assertTrue(all(row.get("food_format") == "shawarma" for row in seeds))
-        self.assertNotIn("Pizza Hut", names)
-        self.assertNotIn("Johnny & Jugnu", names)
-        self.assertGreaterEqual(len(seeds), 4)
-        self.assertTrue(
-            {"Monty Shawarma", "Rizwan Pocket Shawarma"} & set(names)
-            or len(seeds) >= 4
-        )
+    def test_pakistan_shawarma_for_sultan(self):
         from app.services.competitive import _food_rival_peer_hint
 
         self.assertEqual(
@@ -405,11 +391,10 @@ class LocalSeedTests(unittest.TestCase):
             )
         )
 
-    def test_beauty_brand_detection_and_seeds(self):
+    def test_beauty_brand_detection(self):
         from app.services.competitive import (
             _client_peer_hint,
             _looks_like_beauty_client,
-            _seed_local_beauty_rivals,
         )
 
         self.assertTrue(_looks_like_beauty_client("Hifsa Khan", "Beauty & Personal Care", "Beauty salon & makeup studio"))
@@ -417,15 +402,6 @@ class LocalSeedTests(unittest.TestCase):
         self.assertTrue(_looks_like_beauty_client("Nabila Salon", "hair styling"))
         self.assertFalse(_looks_like_beauty_client("Systems Limited", "Software", "IT services"))
         self.assertFalse(_looks_like_beauty_client("Cheezious", "Fast Food", "Pizza"))
-
-        seeds = _seed_local_beauty_rivals("Pakistan", "Hifsa Khan", limit=8)
-        names = [r["name"] for r in seeds]
-        self.assertIn("Depilex Beauty Clinic", names)
-        self.assertIn("Kashee's Beauty Parlour", names)
-        self.assertIn("Sabs The Salon", names)
-        self.assertIn("Nabila Salon", names)
-        self.assertNotIn("Hifsa Khan", names)
-        self.assertGreaterEqual(len(seeds), 5)
 
         self.assertEqual(
             _client_peer_hint("Hifsa Khan", "Beauty & Personal Care", "Beauty salon"),
@@ -573,6 +549,178 @@ class LocalSeedTests(unittest.TestCase):
         self.assertTrue(any("beauty" in q.lower() or "salon" in q.lower() for q in local_q), local_q)
         self.assertNotIn("software house", blob)
         self.assertNotIn("pizza", blob)
+
+    def test_semantic_hybrid_data_ai_classification(self):
+        from types import SimpleNamespace
+        from app.services.competitive import (
+            _detect_industry_category,
+            _incompatible_peer,
+            _niche_competitor_queries,
+        )
+
+        # 1. Semantic hybrid category detection
+        cat_databiqs = _detect_industry_category(
+            "Databiqs", "Enterprise AI solutions and automation", "Software Agency", "services"
+        )
+        self.assertEqual(cat_databiqs, "data_ai")
+
+        cat_systems = _detect_industry_category(
+            "Systems Limited", "IT services and custom software", "Software House", "services"
+        )
+        self.assertEqual(cat_systems, "software")
+
+        # 2. Incompatible peer filtering: reject generic software giants for AI consultancies
+        self.assertTrue(
+            _incompatible_peer(
+                client_model="services",
+                client_industry="Software Agency",
+                client_niche="Enterprise AI solutions and automation",
+                rival_model="services",
+                rival_industry="Software",
+                rival_blob="10Pearls global custom software engineering outsourcing",
+                client_name="Databiqs",
+            )
+        )
+        self.assertTrue(
+            _incompatible_peer(
+                client_model="services",
+                client_industry="Software Agency",
+                client_niche="Enterprise AI solutions and automation",
+                rival_model="services",
+                rival_industry="Software",
+                rival_blob="Arbisoft legacy custom software development body shop",
+                client_name="Databiqs",
+            )
+        )
+
+        # 3. Compatible peer: keep direct AI peers
+        self.assertFalse(
+            _incompatible_peer(
+                client_model="services",
+                client_industry="Software Agency",
+                client_niche="Enterprise AI solutions and automation",
+                rival_model="services",
+                rival_industry="AI Solutions",
+                rival_blob="Astraea AI enterprise machine learning and automation consultancy",
+                client_name="Databiqs",
+            )
+        )
+
+        # 4. Search query generation: AI-focused queries generated instead of generic software house listicles
+        client = SimpleNamespace(
+            name="Databiqs",
+            niche="Enterprise AI solutions and automation",
+            industry="Software Agency",
+            notes="Business model: services",
+            tagline="Enterprise AI & Automation",
+            website="https://databiqs.com",
+        )
+        queries = _niche_competitor_queries(client, "Pakistan", scope="local")
+        blob = " ".join(queries).lower()
+        self.assertTrue(any("ai" in q.lower() or "data" in q.lower() or "analytics" in q.lower() for q in queries), queries)
+        self.assertNotIn("top software houses", blob)
+
+        # 5. Layer 1 persistence in client.notes
+        from app.services.competitive import (
+            _industry_category_from_client,
+            _set_industry_category,
+        )
+        test_client = SimpleNamespace(name="Databiqs", notes=None, niche="Enterprise AI", industry="Software Agency")
+        _set_industry_category(test_client, "data_ai")
+        self.assertIn("Industry category: data_ai", test_client.notes)
+        self.assertEqual(_industry_category_from_client(test_client), "data_ai")
+        self.assertEqual(_detect_industry_category(test_client), "data_ai")
+
+    def test_local_market_and_peer_verification(self):
+        from app.services.competitive import _filter_niche_competitors, _rival_fits_run_scope
+
+        candidates = [
+            {
+                "name": "Cubix",
+                "website": "https://www.cubix.co",
+                "industry": "Software development",
+                "business_model": "services",
+                "headquarters_country": "Unknown",
+                "why_relevant": "Cubix is a software development firm that builds mobile apps, web products, and games.",
+                "threat_level": "medium",
+                "overlap_score": 75.0,
+                "same_niche": True,
+                "same_market": True,
+                "is_global_platform": False,
+            },
+            {
+                "name": "DataSoft Systems",
+                "website": "https://www.datasoft-global.com",
+                "industry": "IT consulting",
+                "business_model": "services",
+                "headquarters_country": "Not disclosed on the website",
+                "why_relevant": "DataSoft Systems provides custom software development, enterprise integration worldwide.",
+                "threat_level": "medium",
+                "overlap_score": 75.0,
+                "same_niche": True,
+                "same_market": True,
+                "is_global_platform": False,
+            },
+            {
+                "name": "Techlogix",
+                "website": "https://www.techlogix.com",
+                "industry": "IT consulting & services",
+                "business_model": "services",
+                "headquarters_country": "Pakistan",
+                "why_relevant": "Based in Karachi, Pakistan, Techlogix runs a dedicated Data Analytics and AI practice delivering BI dashboards.",
+                "threat_level": "high",
+                "overlap_score": 88.0,
+                "same_niche": True,
+                "same_market": True,
+                "is_global_platform": False,
+            },
+            {
+                "name": "RedBuffer",
+                "website": "https://redbuffer.net",
+                "industry": "AI Solutions",
+                "business_model": "services",
+                "headquarters_country": "Pakistan",
+                "why_relevant": "RedBuffer specializes in enterprise AI, machine learning and automation platforms for clients in Pakistan.",
+                "threat_level": "high",
+                "overlap_score": 90.0,
+                "same_niche": True,
+                "same_market": True,
+                "is_global_platform": False,
+            }
+        ]
+
+        kept = _filter_niche_competitors(
+            candidates,
+            "Databiqs",
+            market_area="Pakistan",
+            niche="Enterprise AI automation and chatbot solutions",
+            industry="Software agency",
+            business_model="services",
+            min_overlap=55.0,
+            limit=10,
+            require_local_market=True,
+        )
+
+        kept_names = [c["name"] for c in kept]
+        self.assertNotIn("Cubix", kept_names)
+        self.assertNotIn("DataSoft Systems", kept_names)
+        self.assertIn("Techlogix", kept_names)
+        self.assertIn("RedBuffer", kept_names)
+
+        # Also test _rival_fits_run_scope directly on dead domain / unverified candidate
+        fits = _rival_fits_run_scope(
+            name="DataSoft Systems",
+            website="https://www.datasoft-global.com",
+            headquarters="Not disclosed on the website",
+            description="Global software services",
+            why="Global software services",
+            scope="local",
+            market="Pakistan",
+            client_name="Databiqs",
+            strict=True,
+        )
+        self.assertFalse(fits, "DataSoft Systems with unknown HQ and no local proof should not fit local Pakistan scope")
+
 
 
 

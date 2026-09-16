@@ -57,7 +57,7 @@ class Settings(BaseSettings):
         return bool((self.supabase_url or "").strip() and self.resolved_jwt_secret())
 
     groq_api_key: str = ""
-    groq_model: str = "openai/gpt-oss-120b"
+    groq_model: str = "qwen/qwen3.8-27b"
     apify_key: str = ""
     serp_api: str = ""
     firecrawl_api_key: str = ""

@@ -104,22 +104,41 @@ async def dashboard(ctx: AuthContext = Depends(get_auth_context), db: AsyncSessi
     agency_id = ctx.agency.id
     month_start = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-    clients_count = (
-        await db.execute(select(func.count()).select_from(ClientBrand).where(ClientBrand.agency_id == agency_id))
-    ).scalar_one()
-    competitors_count = (
-        await db.execute(
-            select(func.count())
-            .select_from(Competitor)
-            .where(Competitor.agency_id == agency_id, Competitor.is_tracking.is_(True))
-        )
-    ).scalar_one()
-    reports_count = (
-        await db.execute(select(func.count()).select_from(Report).where(Report.agency_id == agency_id))
-    ).scalar_one()
-    open_insights = (
-        await db.execute(select(func.count()).select_from(Insight).where(Insight.agency_id == agency_id))
-    ).scalar_one()
+    metrics_query = select(
+        select(func.count()).select_from(ClientBrand).where(ClientBrand.agency_id == agency_id).scalar_subquery().label("clients_count"),
+        select(func.count()).select_from(Competitor).where(Competitor.agency_id == agency_id, Competitor.is_tracking.is_(True)).scalar_subquery().label("competitors_count"),
+        select(func.count()).select_from(Report).where(Report.agency_id == agency_id).scalar_subquery().label("reports_count"),
+        select(func.count()).select_from(Insight).where(Insight.agency_id == agency_id).scalar_subquery().label("open_insights"),
+        select(func.count()).select_from(ClientBrand).where(ClientBrand.agency_id == agency_id, ClientBrand.is_active.is_(True)).scalar_subquery().label("active_clients"),
+        select(func.count()).select_from(Report).where(Report.agency_id == agency_id, Report.created_at >= month_start).scalar_subquery().label("reports_month"),
+        select(func.count()).select_from(FeatureTicket).where(FeatureTicket.agency_id == agency_id, FeatureTicket.created_at >= month_start).scalar_subquery().label("tickets_month"),
+        select(func.count()).select_from(GoalAlert).where(GoalAlert.agency_id == agency_id, GoalAlert.acted_on.is_(True), GoalAlert.created_at >= month_start).scalar_subquery().label("alerts_acted"),
+        select(func.count()).select_from(GoalAlert).where(GoalAlert.agency_id == agency_id, GoalAlert.created_at >= month_start).scalar_subquery().label("alerts_total"),
+        select(func.count()).select_from(DeliveryLog).where(DeliveryLog.agency_id == agency_id, DeliveryLog.created_at >= month_start).scalar_subquery().label("deliveries"),
+        select(func.count()).select_from(FeatureTicket).where(FeatureTicket.agency_id == agency_id, FeatureTicket.created_at >= month_start, FeatureTicket.jira_key.is_not(None)).scalar_subquery().label("jira_pushed"),
+        select(func.count()).select_from(InsightFeedback).where(InsightFeedback.agency_id == agency_id, InsightFeedback.rating == "useful").scalar_subquery().label("useful"),
+        select(func.count()).select_from(InsightFeedback).where(InsightFeedback.agency_id == agency_id, InsightFeedback.rating == "useless").scalar_subquery().label("useless"),
+        select(func.count()).select_from(ProductFeature).where(ProductFeature.agency_id == agency_id, ProductFeature.is_wishlisted.is_(False)).scalar_subquery().label("owned_features"),
+        select(func.count()).select_from(ProductFeature).where(ProductFeature.agency_id == agency_id, ProductFeature.is_wishlisted.is_(True)).scalar_subquery().label("wishlist_features"),
+    )
+    metrics_row = (await db.execute(metrics_query)).one()
+    (
+        clients_count,
+        competitors_count,
+        reports_count,
+        open_insights,
+        active_clients,
+        reports_month,
+        tickets_month,
+        alerts_acted,
+        alerts_total,
+        deliveries,
+        jira_pushed,
+        useful,
+        useless,
+        owned_features,
+        wishlist_features,
+    ) = metrics_row
     recent_trends = (
         await db.execute(
             select(TrendSignal).where(TrendSignal.agency_id == agency_id).order_by(TrendSignal.detected_at.desc()).limit(6)
@@ -130,69 +149,6 @@ async def dashboard(ctx: AuthContext = Depends(get_auth_context), db: AsyncSessi
             select(Insight).where(Insight.agency_id == agency_id).order_by(Insight.created_at.desc()).limit(6)
         )
     ).scalars().all()
-    active_clients = (
-        await db.execute(
-            select(func.count())
-            .select_from(ClientBrand)
-            .where(ClientBrand.agency_id == agency_id, ClientBrand.is_active.is_(True))
-        )
-    ).scalar_one()
-    reports_month = (
-        await db.execute(
-            select(func.count()).select_from(Report).where(Report.agency_id == agency_id, Report.created_at >= month_start)
-        )
-    ).scalar_one()
-    tickets_month = (
-        await db.execute(
-            select(func.count())
-            .select_from(FeatureTicket)
-            .where(FeatureTicket.agency_id == agency_id, FeatureTicket.created_at >= month_start)
-        )
-    ).scalar_one()
-    alerts_acted = (
-        await db.execute(
-            select(func.count())
-            .select_from(GoalAlert)
-            .where(GoalAlert.agency_id == agency_id, GoalAlert.acted_on.is_(True), GoalAlert.created_at >= month_start)
-        )
-    ).scalar_one()
-    alerts_total = (
-        await db.execute(
-            select(func.count()).select_from(GoalAlert).where(GoalAlert.agency_id == agency_id, GoalAlert.created_at >= month_start)
-        )
-    ).scalar_one()
-    deliveries = (
-        await db.execute(
-            select(func.count())
-            .select_from(DeliveryLog)
-            .where(DeliveryLog.agency_id == agency_id, DeliveryLog.created_at >= month_start)
-        )
-    ).scalar_one()
-    jira_pushed = (
-        await db.execute(
-            select(func.count())
-            .select_from(FeatureTicket)
-            .where(
-                FeatureTicket.agency_id == agency_id,
-                FeatureTicket.created_at >= month_start,
-                FeatureTicket.jira_key.is_not(None),
-            )
-        )
-    ).scalar_one()
-    useful = (
-        await db.execute(
-            select(func.count())
-            .select_from(InsightFeedback)
-            .where(InsightFeedback.agency_id == agency_id, InsightFeedback.rating == "useful")
-        )
-    ).scalar_one()
-    useless = (
-        await db.execute(
-            select(func.count())
-            .select_from(InsightFeedback)
-            .where(InsightFeedback.agency_id == agency_id, InsightFeedback.rating == "useless")
-        )
-    ).scalar_one()
 
     threat_rows = (
         await db.execute(
@@ -252,110 +208,61 @@ async def dashboard(ctx: AuthContext = Depends(get_auth_context), db: AsyncSessi
             }
         )
 
-    clients = (
-        await db.execute(
-            select(ClientBrand)
-            .where(ClientBrand.agency_id == agency_id, ClientBrand.is_active.is_(True))
-            .order_by(ClientBrand.created_at.desc())
+    rivals_subq = select(func.count()).where(Competitor.client_id == ClientBrand.id, Competitor.is_tracking.is_(True)).scalar_subquery()
+    feats_subq = select(func.count()).where(ProductFeature.client_id == ClientBrand.id).scalar_subquery()
+    reps_subq = select(func.count()).where(Report.client_id == ClientBrand.id).scalar_subquery()
+    tix_subq = select(func.count()).where(FeatureTicket.client_id == ClientBrand.id).scalar_subquery()
+    gaps_subq = select(func.count()).where(GapReport.client_id == ClientBrand.id).scalar_subquery()
+    alerts_subq = select(func.count()).where(GoalAlert.client_id == ClientBrand.id, GoalAlert.acted_on.is_(False)).scalar_subquery()
+    wishlist_subq = select(func.count()).where(ProductFeature.client_id == ClientBrand.id, ProductFeature.is_wishlisted.is_(True)).scalar_subquery()
+    job_subq = select(func.max(TrackingJob.finished_at)).where(TrackingJob.client_id == ClientBrand.id, TrackingJob.finished_at.is_not(None)).scalar_subquery()
+    report_subq = select(func.max(Report.created_at)).where(Report.client_id == ClientBrand.id).scalar_subquery()
+
+    query = (
+        select(
+            ClientBrand,
+            rivals_subq.label("rivals"),
+            feats_subq.label("features"),
+            reps_subq.label("reports"),
+            tix_subq.label("tickets"),
+            gaps_subq.label("gaps"),
+            alerts_subq.label("alerts"),
+            wishlist_subq.label("wishlist"),
+            job_subq.label("last_job_at"),
+            report_subq.label("last_report_at"),
         )
-    ).scalars().all()
+        .where(ClientBrand.agency_id == agency_id, ClientBrand.is_active.is_(True))
+        .order_by(ClientBrand.created_at.desc())
+    )
+
+    result = await db.execute(query)
+
     portfolio = []
-    for client in clients:
-        rivals = (
-            await db.execute(
-                select(func.count())
-                .select_from(Competitor)
-                .where(Competitor.client_id == client.id, Competitor.is_tracking.is_(True))
-            )
-        ).scalar_one()
-        feats = (
-            await db.execute(select(func.count()).select_from(ProductFeature).where(ProductFeature.client_id == client.id))
-        ).scalar_one()
-        reps = (
-            await db.execute(select(func.count()).select_from(Report).where(Report.client_id == client.id))
-        ).scalar_one()
-        tix = (
-            await db.execute(select(func.count()).select_from(FeatureTicket).where(FeatureTicket.client_id == client.id))
-        ).scalar_one()
-        gaps = (
-            await db.execute(select(func.count()).select_from(GapReport).where(GapReport.client_id == client.id))
-        ).scalar_one()
-        alerts = (
-            await db.execute(
-                select(func.count())
-                .select_from(GoalAlert)
-                .where(GoalAlert.client_id == client.id, GoalAlert.acted_on.is_(False))
-            )
-        ).scalar_one()
-        wishlist = (
-            await db.execute(
-                select(func.count())
-                .select_from(ProductFeature)
-                .where(
-                    ProductFeature.client_id == client.id,
-                    ProductFeature.is_wishlisted.is_(True),
-                )
-            )
-        ).scalar_one()
-        last_job_at = (
-            await db.execute(
-                select(TrackingJob.finished_at)
-                .where(
-                    TrackingJob.client_id == client.id,
-                    TrackingJob.agency_id == agency_id,
-                    TrackingJob.finished_at.is_not(None),
-                )
-                .order_by(TrackingJob.finished_at.desc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        last_report_at = (
-            await db.execute(
-                select(Report.created_at)
-                .where(Report.client_id == client.id, Report.agency_id == agency_id)
-                .order_by(Report.created_at.desc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        candidates = [dt for dt in (last_job_at, last_report_at) if dt is not None]
+    clients = []
+    for row in result.all():
+        client, r, f, rep, t, g, a, w, j, r_at = row
+        clients.append(client)
+        candidates = [dt for dt in (j, r_at) if dt is not None]
         last_intel_at = max(candidates) if candidates else None
+
         portfolio.append(
             {
                 "id": client.id,
                 "name": client.name,
                 "industry": client.industry,
                 "is_active": client.is_active,
-                "rivals": rivals,
-                "features": feats,
-                "reports": reps,
-                "tickets": tix,
-                "gaps": gaps,
-                "alerts": alerts,
-                "wishlist": wishlist,
+                "rivals": r or 0,
+                "features": f or 0,
+                "reports": rep or 0,
+                "tickets": t or 0,
+                "gaps": g or 0,
+                "alerts": a or 0,
+                "wishlist": w or 0,
                 "last_intel_at": last_intel_at.isoformat() if last_intel_at else None,
             }
         )
 
-    owned_features = (
-        await db.execute(
-            select(func.count())
-            .select_from(ProductFeature)
-            .where(
-                ProductFeature.agency_id == agency_id,
-                ProductFeature.is_wishlisted.is_(False),
-            )
-        )
-    ).scalar_one()
-    wishlist_features = (
-        await db.execute(
-            select(func.count())
-            .select_from(ProductFeature)
-            .where(
-                ProductFeature.agency_id == agency_id,
-                ProductFeature.is_wishlisted.is_(True),
-            )
-        )
-    ).scalar_one()
+    # owned_features and wishlist_features are already fetched in metrics_query
 
     alert_impact_rows = (
         await db.execute(

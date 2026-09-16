@@ -60,16 +60,22 @@ async def _portfolio_brief(db: AsyncSession, agency_id: str) -> list[dict]:
             .limit(40)
         )
     ).scalars().all()
+    client_ids = [c.id for c in clients]
+    comp_map = {}
+    
+    if client_ids:
+        comps_res = await db.execute(
+            select(Competitor.client_id, Competitor.name).where(
+                Competitor.client_id.in_(client_ids),
+                Competitor.agency_id == agency_id,
+            )
+        )
+        for c_id, name in comps_res.all():
+            comp_map.setdefault(c_id, []).append(name)
+
     brief: list[dict] = []
     for client in clients:
-        comps = (
-            await db.execute(
-                select(Competitor.name).where(
-                    Competitor.client_id == client.id,
-                    Competitor.agency_id == agency_id,
-                )
-            )
-        ).scalars().all()
+        comps = comp_map.get(client.id, [])
         brief.append(
             {
                 "id": client.id,
