@@ -304,10 +304,17 @@ def compute_budget(agency: Agency, active_clients: int, *, intel_runs_used: int 
     list_price = estimated
     percent = max(0, int(agency.byok_discount_percent or 0))
     estimated = discounted_cents(list_price, percent)
+    has_sub = bool(agency.stripe_subscription_id)
+    raw_status = (agency.billing_status or "").strip().lower()
+    if not has_sub:
+        status = raw_status if raw_status in {"canceled", "incomplete"} else "not_subscribed"
+    else:
+        status = agency.billing_status or "active"
+
     return BudgetOut(
         plan=values["id"],
         plan_name="PAYG" if payg else values["name"],
-        billing_status=agency.billing_status,
+        billing_status=status,
         cancel_at_period_end=bool(agency.cancel_at_period_end),
         billing_period_start=agency.billing_period_start,
         billing_period_end=agency.billing_period_end,
@@ -334,11 +341,11 @@ def compute_budget(agency: Agency, active_clients: int, *, intel_runs_used: int 
         budget_remaining_cents=estimated,
         byok_discount_percent=percent,
         list_price_cents=list_price,
-        estimated_monthly_cents=estimated,
+        estimated_monthly_cents=estimated if has_sub else 0,
         amount_paid_cents=0,
-        upcoming_invoice_cents=estimated,
+        upcoming_invoice_cents=estimated if has_sub else 0,
         stripe_configured=bool(settings.stripe_secret_key),
-        has_subscription=bool(agency.stripe_subscription_id),
+        has_subscription=has_sub,
         billing_model="payg" if payg else "plan",
         payg_available=is_agency_workspace(agency),
         catalog=billing_catalog(values["id"]),

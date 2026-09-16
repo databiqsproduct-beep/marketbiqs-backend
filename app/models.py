@@ -72,7 +72,7 @@ class Agency(Base):
     stripe_base_item_id: Mapped[str | None] = mapped_column(String(120))
     stripe_pack_item_id: Mapped[str | None] = mapped_column(String(120))
     stripe_scrape_item_id: Mapped[str | None] = mapped_column(String(120))
-    billing_status: Mapped[str] = mapped_column(String(40), default="trialing")
+    billing_status: Mapped[str] = mapped_column(String(40), default="not_subscribed")
     billing_model: Mapped[str] = mapped_column(String(20), default="plan")
     cancel_at_period_end: Mapped[bool] = mapped_column(Boolean, default=False)
     billing_period_start: Mapped[datetime | None] = mapped_column(DateTime)

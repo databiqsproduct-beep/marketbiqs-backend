@@ -33,7 +33,7 @@ def _agency_for_mode(name: str, slug: str, workspace_mode: str) -> Agency:
         plan=plan,
         brand_color="#0F766E",
         brand_secondary="#134E4A",
-        billing_status="active",
+        billing_status="not_subscribed",
         billing_model="plan",
         cancel_at_period_end=False,
         client_pack_count=0,
