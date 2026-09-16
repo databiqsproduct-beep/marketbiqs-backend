@@ -217,6 +217,7 @@ async def _apply_schema_patches() -> None:
         "ALTER TABLE agencies ADD COLUMN cancel_at_period_end BOOLEAN DEFAULT FALSE",
         "ALTER TABLE agencies ADD COLUMN billing_period_start TIMESTAMP",
         "ALTER TABLE agencies ADD COLUMN billing_period_end TIMESTAMP",
+        "UPDATE agencies SET billing_status = 'not_subscribed' WHERE stripe_subscription_id IS NULL AND (billing_status = 'active' OR billing_status = 'trialing')",
     ]
     postgres_patches = [
         "ALTER TABLE goal_alerts ALTER COLUMN impact TYPE VARCHAR(255)",
