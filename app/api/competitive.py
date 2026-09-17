@@ -715,7 +715,6 @@ async def client_workspace(
         _food_format_compatible,
         _is_generic_or_fake_rival_name,
         _is_self_rival,
-        _is_curated_seed_rival,
         _market_area_from_client,
         _looks_like_content_or_cpg_noise,
         _is_blog_or_article_url,
@@ -745,7 +744,7 @@ async def client_workspace(
         else ""
     )
     for rival in dirty:
-        if rival.is_pinned or _is_curated_seed_rival(rival.name, market_hint):
+        if rival.is_pinned:
             continue
         drop = _looks_like_brand_geo_hallucination(
             client.name,

@@ -148,7 +148,7 @@ COMMON_ISSUES: list[dict[str, str]] = [
         "fix": (
             "Re-run with Replace mode after pinning any good rivals you want to keep. "
             "Ensure the client website/industry/geo are correct. "
-            "SerpAPI must be valid for live discovery; if SerpAPI fails, curated seed fallbacks may appear. "
+            "SerpAPI must be valid for live discovery. "
             "Remove bad rivals with × on the competitor list."
         ),
     },

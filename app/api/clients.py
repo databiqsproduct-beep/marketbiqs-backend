@@ -12,40 +12,69 @@ from app.services.competitive import collapse_duplicate_competitors, _find_match
 router = APIRouter(prefix="/clients", tags=["clients"])
 
 
-async def _enrich_client(db: AsyncSession, client: ClientBrand) -> ClientOut:
-    rivals = (
-        await db.execute(
-            select(func.count())
-            .select_from(Competitor)
-            .where(Competitor.client_id == client.id, Competitor.is_tracking.is_(True))
-        )
-    ).scalar_one()
-    features = (
-        await db.execute(select(func.count()).select_from(ProductFeature).where(ProductFeature.client_id == client.id))
-    ).scalar_one()
-    reports = (
-        await db.execute(select(func.count()).select_from(Report).where(Report.client_id == client.id))
-    ).scalar_one()
-    tickets = (
-        await db.execute(select(func.count()).select_from(FeatureTicket).where(FeatureTicket.client_id == client.id))
-    ).scalar_one()
-    alerts_open = (
-        await db.execute(
-            select(func.count())
-            .select_from(GoalAlert)
-            .where(GoalAlert.client_id == client.id, GoalAlert.acted_on.is_(False))
-        )
-    ).scalar_one()
-    data = ClientOut.model_validate(client)
-    return data.model_copy(
-        update={
-            "rivals_count": rivals,
-            "features_count": features,
-            "reports_count": reports,
-            "tickets_count": tickets,
-            "alerts_open": alerts_open,
-        }
+async def _bulk_enrich_clients(db: AsyncSession, clients: list[ClientBrand]) -> list[ClientOut]:
+    if not clients:
+        return []
+
+    client_ids = [c.id for c in clients]
+
+    rivals_subq = (
+        select(func.count())
+        .where(Competitor.client_id == ClientBrand.id, Competitor.is_tracking.is_(True))
+        .scalar_subquery()
     )
+    features_subq = (
+        select(func.count())
+        .where(ProductFeature.client_id == ClientBrand.id)
+        .scalar_subquery()
+    )
+    reports_subq = (
+        select(func.count())
+        .where(Report.client_id == ClientBrand.id)
+        .scalar_subquery()
+    )
+    tickets_subq = (
+        select(func.count())
+        .where(FeatureTicket.client_id == ClientBrand.id)
+        .scalar_subquery()
+    )
+    alerts_subq = (
+        select(func.count())
+        .where(GoalAlert.client_id == ClientBrand.id, GoalAlert.acted_on.is_(False))
+        .scalar_subquery()
+    )
+
+    query = select(
+        ClientBrand.id,
+        rivals_subq.label("rivals_count"),
+        features_subq.label("features_count"),
+        reports_subq.label("reports_count"),
+        tickets_subq.label("tickets_count"),
+        alerts_subq.label("alerts_open"),
+    ).where(ClientBrand.id.in_(client_ids))
+
+    result = await db.execute(query)
+    counts_map = {row.id: row for row in result.all()}
+
+    results = []
+    for client in clients:
+        counts = counts_map.get(client.id)
+        data = ClientOut.model_validate(client)
+        if counts:
+            results.append(
+                data.model_copy(
+                    update={
+                        "rivals_count": counts.rivals_count or 0,
+                        "features_count": counts.features_count or 0,
+                        "reports_count": counts.reports_count or 0,
+                        "tickets_count": counts.tickets_count or 0,
+                        "alerts_open": counts.alerts_open or 0,
+                    }
+                )
+            )
+        else:
+            results.append(data.model_copy())
+    return results
 
 
 @router.get("", response_model=list[ClientOut])
@@ -56,7 +85,7 @@ async def list_clients(ctx: AuthContext = Depends(get_auth_context), db: AsyncSe
         .order_by(ClientBrand.created_at.desc())
     )
     clients = list(result.scalars().all())
-    return [await _enrich_client(db, c) for c in clients]
+    return await _bulk_enrich_clients(db, clients)
 
 
 @router.post("", response_model=ClientOut)
@@ -74,12 +103,12 @@ async def create_client(
     await db.flush()
     # Intel is started explicitly by the UI via POST /clients/{id}/auto-run
     # (background create-time runs raced the UI and often finished with no feedback).
-    return await _enrich_client(db, client)
+    return (await _bulk_enrich_clients(db, [client]))[0]
 
 
 @router.get("/{client_id}", response_model=ClientOut)
 async def get_client(client: ClientBrand = Depends(get_tenant_client), db: AsyncSession = Depends(get_db)):
-    return await _enrich_client(db, client)
+    return (await _bulk_enrich_clients(db, [client]))[0]
 
 
 @router.patch("/{client_id}", response_model=ClientOut)
@@ -98,7 +127,7 @@ async def update_client(
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(client, key, value)
     await db.flush()
-    return await _enrich_client(db, client)
+    return (await _bulk_enrich_clients(db, [client]))[0]
 
 
 @router.delete("/{client_id}")

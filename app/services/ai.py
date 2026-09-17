@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -17,16 +18,15 @@ settings = get_settings()
 logger = logging.getLogger("marketbiqs.ai")
 
 _DEFAULT_GROQ_MODELS = (
-    "groq/compound-mini",
-    "groq/compound",
-    "qwen/qwen3.6-27b",
     "qwen/qwen3.8-27b",
-    "openai/gpt-oss-120b",
+    "allam-2-7b",
     "openai/gpt-oss-20b",
+    "groq/compound",
+    "groq/compound-mini",
+    "openai/gpt-oss-120b",
 )
 FALLBACK_PREFIX = "Competitive intelligence briefing prepared from available workspace data."
-# Reasoning models burn completion budget on hidden "thinking" — leave headroom for JSON.
-_GROQ_MAX_TOKENS = 4096
+_GROQ_MAX_TOKENS = 1500
 # After TPM 429, skip further calls for that specific model/agency until cooldown.
 _model_groq_cooldown_until: dict[tuple[str, str], float] = {}
 _RATE_LIMIT_COOLDOWN_CAP_S = 45.0
@@ -57,6 +57,11 @@ def _is_rate_limited(exc: BaseException) -> bool:
         or "tpd" in text
         or "error code: 429" in text
     )
+
+
+def _is_context_length_exceeded(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return "context_length_exceeded" in text or "reduce the length of the messages" in text
 
 
 def _retry_after_seconds(exc: BaseException) -> float:
@@ -151,11 +156,21 @@ async def chat_completion(
         if _model_in_cooldown(agency_id, model):
             continue
         try:
+            model_max = 500 if "qwen" in model.lower() else (600 if "allam" in model.lower() else _GROQ_MAX_TOKENS)
+            req_messages = messages
+            if "allam" in model.lower():
+                req_messages = [
+                    {
+                        "role": m.get("role", "user"),
+                        "content": (m.get("content") or "")[:7000],
+                    }
+                    for m in messages
+                ]
             kwargs: dict[str, Any] = {
                 "model": model,
-                "messages": messages,
+                "messages": req_messages,
                 "temperature": temperature,
-                "max_tokens": _GROQ_MAX_TOKENS,
+                "max_tokens": model_max,
             }
             if json_mode:
                 kwargs["response_format"] = {"type": "json_object"}
@@ -170,9 +185,29 @@ async def chat_completion(
             )
         except Exception as exc:
             last_exc = exc
+            if _is_context_length_exceeded(exc):
+                logger.warning(
+                    "Groq model %s exceeded context length for agency=%s; trying next",
+                    model,
+                    agency_id,
+                )
+                continue
             if _is_rate_limited(exc):
                 wait_s = _retry_after_seconds(exc)
-                _set_model_cooldown(agency_id, model, wait_s)
+                if wait_s <= 12.0:
+                    logger.info("Groq model %s rate-limited for %.1fs; waiting and retrying once", model, wait_s)
+                    await asyncio.sleep(wait_s + 0.3)
+                    try:
+                        response = await client.chat.completions.create(**kwargs)
+                        content = (response.choices[0].message.content or "").strip()
+                        if content:
+                            return content
+                    except Exception as retry_exc:
+                        last_exc = retry_exc
+                        _set_model_cooldown(agency_id, model, _retry_after_seconds(retry_exc))
+                        continue
+                else:
+                    _set_model_cooldown(agency_id, model, wait_s)
                 logger.warning(
                     "Groq model %s rate-limited for agency=%s (cooldown %.1fs); trying fallback model",
                     model,
@@ -199,7 +234,7 @@ async def chat_completion(
                         model=model,
                         messages=messages,
                         temperature=temperature,
-                        max_tokens=_GROQ_MAX_TOKENS,
+                        max_tokens=model_max,
                     )
                     content = (response.choices[0].message.content or "").strip()
                     if content:
@@ -215,6 +250,30 @@ async def chat_completion(
                     continue
             else:
                 logger.exception("Groq chat_completion failed for agency=%s model=%s: %s", agency_id, model, exc)
+    # If all models were skipped due to cooldown, check if any will expire in <= 5s
+    now = time.monotonic()
+    min_cooldown = min((_model_groq_cooldown_until.get((agency_id, m), 0.0) - now for m in _chat_models()), default=999.0)
+    if 0 < min_cooldown <= 15.0:
+        logger.info("All models in brief cooldown (%.1fs); waiting before fallback", min_cooldown)
+        await asyncio.sleep(min_cooldown + 0.3)
+        for model in _chat_models():
+            if not _model_in_cooldown(agency_id, model):
+                try:
+                    model_max = 500 if "qwen" in model.lower() else (600 if "allam" in model.lower() else _GROQ_MAX_TOKENS)
+                    kwargs = {
+                        "model": model,
+                        "messages": messages,
+                        "temperature": temperature,
+                        "max_tokens": model_max,
+                    }
+                    if json_mode:
+                        kwargs["response_format"] = {"type": "json_object"}
+                    response = await client.chat.completions.create(**kwargs)
+                    content = (response.choices[0].message.content or "").strip()
+                    if content:
+                        return content
+                except Exception:
+                    continue
     logger.warning("All Groq models failed or rate-limited for agency=%s: %s", agency_id, last_exc)
     return _fallback_text(system, user)
 
@@ -310,6 +369,10 @@ def _extract_json_object(raw: str) -> dict[str, Any] | None:
         if start_obj >= 0 and end_obj > start_obj:
             parsed = json.loads(text[start_obj : end_obj + 1])
             if isinstance(parsed, dict):
+                for wrapper in ("profile", "result", "data", "output", "response"):
+                    if wrapper in parsed and isinstance(parsed[wrapper], dict) and len(parsed) == 1:
+                        parsed = parsed[wrapper]
+                        break
                 return parsed
     except Exception:
         return None
