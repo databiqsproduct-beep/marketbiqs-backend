@@ -88,6 +88,45 @@ async def list_clients(ctx: AuthContext = Depends(get_auth_context), db: AsyncSe
     return await _bulk_enrich_clients(db, clients)
 
 
+def _merge_notes_with_metadata(
+    existing_notes: str | None,
+    *,
+    country: str | None = None,
+    city: str | None = None,
+    primary_offering: str | None = None,
+    customer_type: str | None = None,
+    niche: str | None = None,
+) -> str | None:
+    lines = [ln for ln in (existing_notes or "").splitlines() if ln.strip()]
+    clean_lines = []
+    for ln in lines:
+        low = ln.lower().strip()
+        if (
+            (country is not None and (low.startswith("market:") or low.startswith("country:")))
+            or (city is not None and low.startswith("city:"))
+            or (primary_offering is not None and (low.startswith("primary offering:") or low.startswith("offering:")))
+            or (customer_type is not None and low.startswith("customer type:"))
+            or (niche is not None and low.startswith("niche:"))
+        ):
+            continue
+        clean_lines.append(ln)
+
+    meta_headers = []
+    if country:
+        meta_headers.append(f"Market: {country.strip()}")
+    if city:
+        meta_headers.append(f"City: {city.strip()}")
+    if niche:
+        meta_headers.append(f"Niche: {niche.strip()}")
+    if customer_type:
+        meta_headers.append(f"Customer type: {customer_type.strip()}")
+    if primary_offering:
+        meta_headers.append(f"Primary offering: {primary_offering.strip()}")
+
+    all_lines = meta_headers + clean_lines
+    return "\n".join(all_lines).strip() or None
+
+
 @router.post("", response_model=ClientOut)
 async def create_client(
     payload: ClientCreate,
@@ -98,7 +137,22 @@ async def create_client(
         await ensure_client_capacity(db, ctx.agency)
     except ValueError as exc:
         raise HTTPException(status_code=402, detail=str(exc)) from exc
-    client = ClientBrand(agency_id=ctx.agency.id, **payload.model_dump())
+    data = payload.model_dump()
+    country = data.pop("country", None)
+    city = data.pop("city", None)
+    primary_offering = data.pop("primary_offering", None)
+    customer_type = data.pop("customer_type", None)
+    niche_val = data.get("niche")
+    if any([country, city, primary_offering, customer_type, niche_val]):
+        data["notes"] = _merge_notes_with_metadata(
+            data.get("notes"),
+            country=country,
+            city=city,
+            primary_offering=primary_offering,
+            customer_type=customer_type,
+            niche=niche_val,
+        )
+    client = ClientBrand(agency_id=ctx.agency.id, **data)
     db.add(client)
     await db.flush()
     # Intel is started explicitly by the UI via POST /clients/{id}/auto-run
@@ -124,7 +178,22 @@ async def update_client(
             await ensure_client_capacity(db, ctx.agency)
         except ValueError as exc:
             raise HTTPException(status_code=402, detail=str(exc)) from exc
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    country = data.pop("country", None)
+    city = data.pop("city", None)
+    primary_offering = data.pop("primary_offering", None)
+    customer_type = data.pop("customer_type", None)
+    niche_val = data.get("niche")
+    if any(x is not None for x in [country, city, primary_offering, customer_type, niche_val]):
+        data["notes"] = _merge_notes_with_metadata(
+            data.get("notes", client.notes),
+            country=country,
+            city=city,
+            primary_offering=primary_offering,
+            customer_type=customer_type,
+            niche=niche_val,
+        )
+    for key, value in data.items():
         setattr(client, key, value)
     await db.flush()
     return (await _bulk_enrich_clients(db, [client]))[0]

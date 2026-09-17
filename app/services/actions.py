@@ -22,8 +22,13 @@ async def action_run_intel(
     generate_report: bool = False,
     competitor_scope: str = "local",
     competitor_country: str | None = None,
+    competitor_city: str | None = None,
+    industry: str | None = None,
+    niche: str | None = None,
     competitor_count: int = 5,
     competitor_mode: str = "add",
+    primary_offering: str | None = None,
+    customer_type: str | None = None,
 ) -> dict[str, Any]:
     return await run_full_ai_pipeline(
         db,
@@ -33,8 +38,13 @@ async def action_run_intel(
         generate_report=generate_report,
         competitor_scope=competitor_scope,
         competitor_country=competitor_country,
+        competitor_city=competitor_city,
+        industry=industry,
+        niche=niche,
         competitor_count=competitor_count,
         competitor_mode=competitor_mode,
+        primary_offering=primary_offering,
+        customer_type=customer_type,
     )
 
 

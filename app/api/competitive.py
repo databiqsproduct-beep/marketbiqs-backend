@@ -334,6 +334,11 @@ async def build_pack(
 class AutoRunRequest(BaseModel):
     competitor_scope: str = Field(default="local", description="global or local")
     competitor_country: str | None = Field(default=None, max_length=120)
+    competitor_city: str | None = Field(default=None, max_length=120)
+    industry: str | None = Field(default=None, max_length=120)
+    niche: str | None = Field(default=None, max_length=255)
+    primary_offering: str | None = Field(default=None, max_length=1000)
+    customer_type: str | None = Field(default=None, description="b2b, b2c, both, or unknown")
     competitor_count: int = Field(default=5, ge=1, le=10)
     competitor_mode: str = Field(
         default="add",
@@ -356,13 +361,23 @@ class AutoRunRequest(BaseModel):
             raise ValueError("competitor_scope must be global or local")
         return cleaned
 
-    @field_validator("competitor_country")
+    @field_validator("competitor_country", "competitor_city", "industry", "niche", "primary_offering")
     @classmethod
-    def _country(cls, value: str | None) -> str | None:
+    def _clean_str(cls, value: str | None) -> str | None:
         if value is None:
             return None
         cleaned = value.strip()
         return cleaned or None
+
+    @field_validator("customer_type")
+    @classmethod
+    def _clean_cust_type(cls, value: str | None) -> str | None:
+        if not value:
+            return None
+        cleaned = value.strip().lower()
+        if cleaned in {"b2b", "b2c", "both", "unknown"}:
+            return cleaned
+        return None
 
     @field_validator("competitor_mode")
     @classmethod
@@ -387,18 +402,34 @@ async def auto_run(
     Clients should poll GET /api/clients/{id}/jobs/{job_id} (or /jobs) until completed/failed.
     """
     options = payload
-    # Prefer explicit country for local; otherwise fall back to market note or global (stash UX).
-    if options.competitor_scope == "local" and not options.competitor_country:
+    # For local scope: Country must be known before discovery starts.
+    # Never silently convert a local search to global because country is missing.
+    if options.competitor_scope == "local":
+        country = (options.competitor_country or "").strip()
+        if not country:
+            notes = client.notes or ""
+            for line in notes.splitlines():
+                low = line.lower().strip()
+                if low.startswith("market:") or low.startswith("country:"):
+                    country = line.split(":", 1)[1].strip()
+                    break
+        if not country:
+            raise HTTPException(
+                status_code=400,
+                detail="Target country is required for local competitor discovery. Please specify a country.",
+            )
+        options = options.model_copy(update={"competitor_country": country})
+
+    city = options.competitor_city
+    if not city and options.competitor_scope == "local":
         notes = client.notes or ""
-        country = ""
         for line in notes.splitlines():
-            if line.lower().startswith("market:"):
-                country = line.split(":", 1)[1].strip()
+            low = line.lower().strip()
+            if low.startswith("city:"):
+                city = line.split(":", 1)[1].strip()
                 break
-        if country:
-            options = options.model_copy(update={"competitor_country": country})
-        else:
-            options = options.model_copy(update={"competitor_scope": "global"})
+        if city:
+            options = options.model_copy(update={"competitor_city": city})
 
     from app.services.billing import is_payg
 
@@ -429,6 +460,7 @@ async def auto_run(
         detail=(
             f"Queued AI pipeline ({options.competitor_mode}/{options.competitor_scope}"
             + (f" · {options.competitor_country}" if options.competitor_country else "")
+            + (f" · {options.competitor_city}" if options.competitor_city else "")
             + f" · {options.competitor_count} rivals"
             + (" · +report" if options.generate_report else "")
             + ")"
@@ -437,6 +469,11 @@ async def auto_run(
         result_meta={
             "competitor_scope": options.competitor_scope,
             "competitor_country": options.competitor_country,
+            "competitor_city": options.competitor_city,
+            "industry": options.industry,
+            "niche": options.niche,
+            "primary_offering": options.primary_offering,
+            "customer_type": options.customer_type,
             "competitor_count": options.competitor_count,
             "competitor_mode": options.competitor_mode,
             "generate_report": options.generate_report,
@@ -449,6 +486,11 @@ async def auto_run(
     client_id = client.id
     scope = options.competitor_scope
     country = options.competitor_country
+    req_city = options.competitor_city
+    industry_opt = options.industry
+    niche_opt = options.niche
+    primary_offering = options.primary_offering
+    customer_type = options.customer_type
     count = options.competitor_count
     mode = options.competitor_mode
     generate_report = bool(options.generate_report)
@@ -475,8 +517,13 @@ async def auto_run(
                     generate_report=generate_report,
                     competitor_scope=scope,
                     competitor_country=country,
+                    competitor_city=req_city,
+                    industry=industry_opt,
+                    niche=niche_opt,
                     competitor_count=count,
                     competitor_mode=mode,
+                    primary_offering=primary_offering,
+                    customer_type=customer_type,
                 )
                 tracked = await session.get(TrackingJob, job_id)
                 if tracked:
@@ -510,11 +557,13 @@ async def auto_run(
             "message": "Intel started. Poll job status until completed.",
             "competitor_scope": scope,
             "competitor_country": country,
+            "competitor_city": req_city,
             "competitor_count": count,
             "competitor_mode": mode,
             "generate_report": generate_report,
         },
     )
+
 
 
 @router.get("/clients/{client_id}/jobs/{job_id}")

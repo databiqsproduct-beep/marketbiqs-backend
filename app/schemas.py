@@ -90,9 +90,14 @@ class MemberOut(BaseModel):
 class ClientCreate(BaseModel):
     name: str
     industry: str | None = None
+    niche: str | None = None
     website: str | None = None
     logo_url: str | None = None
     notes: str | None = None
+    primary_offering: str | None = None
+    customer_type: str | None = None
+    country: str | None = None
+    city: str | None = None
     delivery_channel: str = "email"
     delivery_emails: list[str] = Field(default_factory=list)
     delivery_whatsapp: str | None = None
@@ -107,6 +112,10 @@ class ClientUpdate(BaseModel):
     website: str | None = None
     logo_url: str | None = None
     notes: str | None = None
+    primary_offering: str | None = None
+    customer_type: str | None = None
+    country: str | None = None
+    city: str | None = None
     is_active: bool | None = None
     delivery_channel: str | None = None
     delivery_emails: list[str] | None = None

@@ -122,6 +122,11 @@ async def run_client_intelligence(
             trend_rows = [t for t in analysis.get("trends") if isinstance(t, dict)][:5]
 
         for trend in trend_rows[:5]:
+            if not isinstance(trend, dict):
+                if isinstance(trend, str) and trend.strip():
+                    trend = {"topic": trend.strip(), "summary": trend.strip()}
+                else:
+                    continue
             db.add(
                 TrendSignal(
                     agency_id=agency.id,
