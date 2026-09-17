@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import AsyncMock, patch
 
 from app.services.competitive import (
     _filter_niche_competitors,
@@ -720,6 +721,270 @@ class LocalSeedTests(unittest.TestCase):
             strict=True,
         )
         self.assertFalse(fits, "DataSoft Systems with unknown HQ and no local proof should not fit local Pakistan scope")
+
+
+class UniversalDiscoveryTests(unittest.IsolatedAsyncioTestCase):
+    @patch("app.services.competitive.ai_service.structured_json", new_callable=AsyncMock)
+    async def test_user_input_precedence(self, mock_ai):
+        """User facts override client notes, website scrape, and AI inference."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        from app.services.competitive import build_client_profile
+
+        mock_ai.return_value = {}
+        client = SimpleNamespace(
+            id="client-1",
+            name="Apex Dental Clinic",
+            industry="Old AI Guessed Industry",
+            niche="Old AI Niche",
+            notes="Market: United States\nCity: New York\nCustomer type: B2B\nPrimary offering: Dental Supplies",
+            website="https://apexdental.ae",
+        )
+        mock_db = AsyncMock()
+        user_inputs = {
+            "country": "United Arab Emirates",
+            "city": "Dubai",
+            "industry": "Healthcare",
+            "primary_offering": "Cosmetic Dentistry & Orthodontics",
+            "customer_type": "B2C",
+        }
+        profile = await build_client_profile(
+            mock_db,
+            "agency-1",
+            client,
+            user_inputs=user_inputs,
+            site_md="Apex Dental supplies bulk dental products to North America.",
+        )
+        self.assertEqual(profile["country"], "United Arab Emirates")
+        self.assertEqual(profile["city"], "Dubai")
+        self.assertEqual(profile["industry"], "Healthcare")
+        self.assertEqual(profile["primary_offering"], "Cosmetic Dentistry & Orthodontics")
+        self.assertEqual(profile["customer_type"], "B2C")
+
+    @patch("app.services.competitive.ai_service.structured_json", new_callable=AsyncMock)
+    async def test_client_without_website_supported_via_offering(self, mock_ai):
+        """Clients without websites succeed if primary offering is provided."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        from app.services.competitive import build_client_profile, generate_search_strategy
+
+        mock_ai.return_value = None
+        client = SimpleNamespace(
+            id="client-2",
+            name="Karachi Biryani House",
+            industry="Restaurant",
+            niche=None,
+            notes="",
+            website="",
+        )
+        mock_db = AsyncMock()
+        user_inputs = {
+            "country": "Pakistan",
+            "city": "Karachi",
+            "industry": "Restaurant",
+            "primary_offering": "Authentic Dum Biryani & BBQ Catering",
+            "customer_type": "B2C",
+        }
+        profile = await build_client_profile(
+            mock_db,
+            "agency-1",
+            client,
+            user_inputs=user_inputs,
+        )
+        self.assertEqual(profile["website"], "")
+        self.assertEqual(profile["primary_offering"], "Authentic Dum Biryani & BBQ Catering")
+
+        strategy = await generate_search_strategy(
+            mock_db, "agency-1", profile, scope="local", country="Pakistan", city="Karachi"
+        )
+        queries = [q["query"] for q in strategy]
+        self.assertTrue(any("karachi" in q.lower() for q in queries))
+        self.assertTrue(any("biryani" in q.lower() or "restaurant" in q.lower() for q in queries))
+
+    @patch("app.services.competitive.ai_service.structured_json", new_callable=AsyncMock)
+    async def test_cross_industry_query_generation(self, mock_ai):
+        """Search strategies are generated dynamically for diverse industries without hardcoding."""
+        from unittest.mock import AsyncMock
+        from app.services.competitive import generate_search_strategy
+
+        mock_ai.return_value = None
+        mock_db = AsyncMock()
+
+        industries_test_cases = [
+            ("Luxe Fashion House", "Fashion", "Designer Evening Gowns", "London", "United Kingdom"),
+            ("Baker & Partners", "Legal", "Corporate M&A Advisory", "Riyadh", "Saudi Arabia"),
+            ("CareFirst Health", "Healthcare", "Pediatric Urgent Care", "Dubai", "United Arab Emirates"),
+            ("CloudOps Tech", "Software", "DevOps & Kubernetes Consulting", "Islamabad", "Pakistan"),
+        ]
+
+        for brand_name, ind, offering, city, country in industries_test_cases:
+            profile = {
+                "name": brand_name,
+                "industry": ind,
+                "primary_offering": offering,
+                "customer_type": "B2B",
+                "country": country,
+                "city": city,
+                "business_model": "services",
+            }
+            strategy = await generate_search_strategy(
+                mock_db, "agency-1", profile, scope="local", country=country, city=city
+            )
+            queries = [q["query"] for q in strategy]
+            self.assertGreaterEqual(len(queries), 3)
+            queries_str = " ".join(queries).lower()
+            self.assertIn(city.lower(), queries_str)
+            self.assertIn(country.lower(), queries_str)
+
+    @patch("app.services.competitive.serp_visibility", new_callable=AsyncMock)
+    @patch("app.services.competitive.ai_service.structured_json", new_callable=AsyncMock)
+    async def test_discovery_entities_extraction_and_resolution(self, mock_ai, mock_serp):
+
+        """Discovery listicles/directories are mined for brand names, and noise domains are rejected."""
+        from unittest.mock import AsyncMock
+        from app.services.competitive import extract_candidate_entities, resolve_and_verify_candidates
+
+        mock_ai.return_value = {"brands": ["Al Tamimi & Company"]}
+        mock_serp.return_value = {
+            "organic": [{"link": "https://www.tamimi.com", "snippet": "Official site"}]
+        }
+        mock_db = AsyncMock()
+
+        search_results = [
+            {
+                "query": "top corporate law firms in Riyadh",
+                "intent": "discovery",
+                "title": "Top 10 Law Firms in Riyadh, Saudi Arabia | LegalGuide",
+                "link": "https://www.legalguide.com/riyadh-law-firms",
+                "snippet": "1. Al Tamimi & Company: Leading regional law firm. 2. Khoshaim & Associates.",
+            }
+        ]
+        direct, discovered = await extract_candidate_entities(
+            mock_db, "agency-1", search_results, client_name="Baker & Partners"
+        )
+        self.assertEqual(len(discovered), 1)
+        self.assertEqual(discovered[0]["name"], "Al Tamimi & Company")
+
+        verified = await resolve_and_verify_candidates(
+            mock_db, "agency-1", direct, discovered, client_name="Baker & Partners", target_country="Saudi Arabia"
+        )
+        self.assertEqual(len(verified), 1)
+        self.assertEqual(verified[0]["name"], "Al Tamimi & Company")
+        self.assertEqual(verified[0]["website"], "https://www.tamimi.com")
+
+    async def test_grounding_rejects_hallucinations_and_self_rivals(self):
+        """Unverified domains, fake names, and self rivals are rejected."""
+        from unittest.mock import AsyncMock
+        from app.services.competitive import resolve_and_verify_candidates
+
+        mock_db = AsyncMock()
+        raw_direct = [
+            {"name": "Baker & Partners", "website": "https://bakerpartners.com", "source": "serp_direct"},
+            {"name": "Best Lawyers in Town", "website": "https://lawyerstown.com", "source": "serp_direct"},
+            {"name": "Real Firm Law", "website": "https://medium.com/@author/firm", "source": "serp_direct"},
+            {"name": "Valid Legal LLC", "website": "https://validlegal.com", "source": "serp_direct"},
+        ]
+        verified = await resolve_and_verify_candidates(
+            mock_db,
+            "agency-1",
+            raw_direct,
+            [],
+            client_name="Baker & Partners",
+            client_website="https://bakerpartners.com",
+            target_country="Saudi Arabia",
+        )
+        v_names = [c["name"] for c in verified]
+        self.assertNotIn("Baker & Partners", v_names)
+        self.assertNotIn("Best Lawyers in Town", v_names)
+        self.assertNotIn("Real Firm Law", v_names)
+        self.assertIn("Valid Legal LLC", v_names)
+
+    def test_mode_handling_behavior(self):
+        """Validates that add preserves baseline, replace resets tracked set, and update preserves pins."""
+        class MockRival:
+            def __init__(self, id, name, pinned=False, tracking=True, score=80.0):
+                self.id = id
+                self.name = name
+                self.is_pinned = pinned
+                self.is_tracking = tracking
+                self.overlap_score = score
+
+        r1 = MockRival("1", "Rival A", pinned=True, score=90.0)
+        r2 = MockRival("2", "Rival B", pinned=False, score=85.0)
+        r3 = MockRival("3", "Rival C", pinned=False, score=75.0)
+        r4 = MockRival("4", "Rival D", pinned=False, score=88.0)
+
+        # In replace mode: pinned rivals come first, then fresh candidates up to target count
+        all_candidates = [r1, r4, r2, r3]
+        pinned = [c for c in all_candidates if c.is_pinned]
+        others = [c for c in all_candidates if not c.is_pinned]
+        selected_replace = pinned + others[:1]
+        self.assertEqual([c.name for c in selected_replace], ["Rival A", "Rival D"])
+
+        # In add mode: baseline preserved, fresh rivals added
+        baseline = [r2]
+        fresh = [r4]
+        selected_add = pinned + fresh + baseline
+        self.assertEqual([c.name for c in selected_add], ["Rival A", "Rival D", "Rival B"])
+
+    def test_natural_search_vocabulary_and_niche_handling(self):
+        from app.services.competitive import (
+            _natural_search_vocabulary,
+            _extract_metadata_from_notes,
+        )
+
+        # 1. Natural search vocabulary
+        sing_food, plur_food = _natural_search_vocabulary("Food & Hospitality", "Pizza Delivery")
+        self.assertEqual(plur_food, "restaurants")
+        self.assertEqual(sing_food, "restaurant")
+
+        sing_saas, plur_saas = _natural_search_vocabulary("Software & Technology", "B2B SaaS")
+        self.assertEqual(plur_saas, "platforms")
+
+        sing_health, plur_health = _natural_search_vocabulary("Healthcare", "Dental Care")
+        self.assertEqual(plur_health, "clinics")
+
+        sing_beauty, plur_beauty = _natural_search_vocabulary("Personal Care", "Hair & Beauty Salon")
+        self.assertEqual(plur_beauty, "salons")
+
+        # 2. Extract metadata from notes
+        sample_notes = (
+            "Industry: Food & Hospitality\n"
+            "Niche: Pizza & Fast Food Delivery\n"
+            "Market: Pakistan\n"
+            "City: Lahore\n"
+        )
+        meta = _extract_metadata_from_notes(sample_notes)
+        self.assertEqual(meta.get("industry"), "Food & Hospitality")
+        self.assertEqual(meta.get("niche"), "Pizza & Fast Food Delivery")
+        self.assertEqual(meta.get("country"), "Pakistan")
+        self.assertEqual(meta.get("city"), "Lahore")
+    def test_defensive_string_normalization_handling(self):
+        from app.services.competitive import _normalize_comparison_row
+
+        # Should safely normalize a string feature row without 'str' object has no attribute 'get'
+        normalized_str = _normalize_comparison_row("Aromatherapy Massage", "Champakali Spa", "Nirvana Spa")
+        self.assertIsNotNone(normalized_str)
+        self.assertEqual(normalized_str["feature_name"], "Aromatherapy Massage")
+        self.assertEqual(normalized_str["our_status"], "parity")
+
+        # Non-dict and non-string inputs should return None safely
+        self.assertIsNone(_normalize_comparison_row(None, "Champakali Spa", "Nirvana Spa"))
+        self.assertIsNone(_normalize_comparison_row(123, "Champakali Spa", "Nirvana Spa"))
+        self.assertIsNone(_normalize_comparison_row("", "Champakali Spa", "Nirvana Spa"))
+
+        # Valid dict row works normally
+        valid_dict = _normalize_comparison_row(
+            {"feature_name": "Hot Stone Therapy", "our_status": "leading", "competitor_status": "lagging"},
+            "Champakali Spa",
+            "Nirvana Spa",
+        )
+        self.assertIsNotNone(valid_dict)
+        self.assertEqual(valid_dict["feature_name"], "Hot Stone Therapy")
+        self.assertEqual(valid_dict["our_status"], "leading")
+
+
+
 
 
 

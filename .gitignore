@@ -17,6 +17,10 @@ __pycache__/
 # Local data / runtime
 biqs.db
 biqs.db-*
+marketbiqs.db
+*.db
+*.db-*
+test_serp.py
 storage/reports/*.pdf
 *.log
 
