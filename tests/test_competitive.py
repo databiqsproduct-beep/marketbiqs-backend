@@ -973,7 +973,6 @@ class UniversalDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(_normalize_comparison_row(123, "Champakali Spa", "Nirvana Spa"))
         self.assertIsNone(_normalize_comparison_row("", "Champakali Spa", "Nirvana Spa"))
 
-        # Valid dict row works normally
         valid_dict = _normalize_comparison_row(
             {"feature_name": "Hot Stone Therapy", "our_status": "leading", "competitor_status": "lagging"},
             "Champakali Spa",
@@ -982,6 +981,276 @@ class UniversalDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(valid_dict)
         self.assertEqual(valid_dict["feature_name"], "Hot Stone Therapy")
         self.assertEqual(valid_dict["our_status"], "leading")
+
+    def test_fashion_brand_extraction_and_generic_filtering(self):
+        from app.services.competitive import (
+            _clean_brand_from_title,
+            _is_generic_or_fake_rival_name,
+            _clean_rival_display_name,
+        )
+
+        # 1. Generic e-commerce & retail categories must be blocked
+        generic_cases = [
+            "Shop Latest",
+            "Women's Luxury Pret & Pret Wear",
+            "Luxury Pret for Women",
+            "Shop Luxury Pret Women Dresses",
+            "Pakistani Women Clothing Store",
+            "Ready-to-Wear Pret Collection Pakistan",
+            "Luxury Pret Ready-to-Wear Dresses",
+            "Clothing",
+            "Ethnic wear companies list from Pakistan",
+            "Top 10 clothing brands in Lahore",
+            "List of best software houses in Islamabad",
+            "Manufacturers list in Karachi",
+        ]
+        for name in generic_cases:
+            self.assertTrue(_is_generic_or_fake_rival_name(name), f"Expected {name} to be generic/fake")
+
+        # 2. Legitimate brands must not be considered generic
+        legit_brands = [
+            "Sana Safinaz",
+            "Sapphire",
+            "Gul Ahmed",
+            "Alkaram Studio",
+            "Nishat Linen",
+            "Junaid Jamshed",
+            "Limelight",
+            "Maria B",
+            "Khaadi",
+            "Allure by IH",
+            "Nureh",
+        ]
+        for brand in legit_brands:
+            self.assertFalse(_is_generic_or_fake_rival_name(brand), f"Expected {brand} to be valid brand")
+
+        # 3. Clean brand from titles with domain matching
+        cases = [
+            ("Sana Safinaz: Top Women's Fashion in Pakistan | Shop Latest", "https://sanasafinaz.com/", "Sana Safinaz"),
+            ("Women's Luxury Pret & Pret Wear | Allure by IH", "https://allurebyih.com/", "Allure by IH"),
+            ("Sapphire | Online Shopping in Pakistan", "https://pk.sapphireonline.pk/", "Sapphire"),
+            ("Gul Ahmed - Ideas Official Online Store", "https://www.gulahmedshop.com/", "Gul Ahmed"),
+            ("Clothing | Zeen Woman", "https://zeenwoman.com/", "Zeen Woman"),
+            ("Jazmin Official Clothing Store", "https://jazmin.pk/", "Jazmin"),
+            ("Pakistan's Pioneering Ready-to-Wear Label – GENERATION", "https://generation.com.pk/", "GENERATION"),
+            ("Hot & Fresh from Caprinos ...", "https://caprinos.com.pk/", "Caprinos"),
+            ("Domino's ...", "https://www.dominos.com.pk/", "Domino's"),
+        ]
+        for title, link, expected in cases:
+            extracted = _clean_brand_from_title(title, link)
+            self.assertEqual(extracted, expected, f"Expected {expected} from '{title}', got '{extracted}'")
+
+    def test_fashion_and_software_cross_isolation(self):
+        """Nextbridge / software houses must be rejected for fashion clients (e.g. Khaadi)."""
+        from app.services.competitive import _incompatible_peer, _looks_like_software_peer_client
+
+        # Nextbridge identified as software
+        self.assertTrue(
+            _looks_like_software_peer_client("Nextbridge", "https://nextbridge.com/ai-transformation-service", "")
+        )
+
+        # Incompatible for Khaadi (Apparel & Fashion)
+        self.assertTrue(
+            _incompatible_peer(
+                client_model="d2c",
+                client_industry="Apparel and fashion",
+                client_niche="Pakistani Ethnic Women's Apparel",
+                rival_model="",
+                rival_industry="",
+                rival_blob="Nextbridge https://nextbridge.com/ai-transformation-service AI transformation and software services",
+                client_name="Khaadi",
+            )
+        )
+
+        # Legitimate fashion peer is NOT incompatible
+        self.assertFalse(
+            _incompatible_peer(
+                client_model="d2c",
+                client_industry="Apparel and fashion",
+                client_niche="Pakistani Ethnic Women's Apparel",
+                rival_model="d2c",
+                rival_industry="Apparel and fashion",
+                rival_blob="Gul Ahmed https://www.gulahmedshop.com Pakistani lawn and ethnic fashion collection",
+                client_name="Khaadi",
+            )
+        )
+
+    def test_enterprise_client_ranks_scale_peers_over_boutiques(self):
+        """Enterprise client (e.g. Khaadi) must rank enterprise peers over single-boutique pret studios."""
+        from app.services.competitive import _filter_niche_competitors, _PEER_ENTERPRISE
+
+        candidates = [
+            # Niche boutique with high raw keyword overlap
+            {
+                "name": "JEEM",
+                "website": "https://jeem.pk",
+                "overlap_score": 92.0,
+                "market_scale": "boutique",
+                "co_occurrence_count": 1,
+            },
+            # Enterprise peers with slightly lower raw overlap but high scale and co-occurrence
+            {
+                "name": "Sapphire",
+                "website": "https://pk.sapphireonline.pk",
+                "overlap_score": 85.0,
+                "market_scale": "enterprise",
+                "co_occurrence_count": 3,
+            },
+            {
+                "name": "Gul Ahmed",
+                "website": "https://www.gulahmedshop.com",
+                "overlap_score": 85.0,
+                "market_scale": "enterprise",
+                "co_occurrence_count": 3,
+            },
+            {
+                "name": "Nishat Linen",
+                "website": "https://nishatlinen.com",
+                "overlap_score": 80.0,
+                "market_scale": "enterprise",
+                "co_occurrence_count": 2,
+            },
+            {
+                "name": "Junaid Jamshed",
+                "website": "https://www.junaidjamshed.com",
+                "overlap_score": 75.0,
+                "market_scale": "enterprise",
+                "co_occurrence_count": 2,
+            },
+            {
+                "name": "Sana Safinaz",
+                "website": "https://sanasafinaz.com",
+                "overlap_score": 75.0,
+                "market_scale": "enterprise",
+                "co_occurrence_count": 2,
+            },
+        ]
+
+        kept = _filter_niche_competitors(
+            candidates,
+            "Khaadi",
+            market_area="Pakistan",
+            niche="Luxury & Pret Womenswear",
+            industry="Apparel, Fashion & Luxury",
+            business_model="b2c_retail",
+            limit=5,
+            client_peer_scale=_PEER_ENTERPRISE,
+        )
+
+        top_names = [c["name"] for c in kept]
+        # Enterprise peers should take top spots
+        self.assertIn("Sapphire", top_names[:2])
+        self.assertIn("Gul Ahmed", top_names[:2])
+        self.assertEqual(top_names[0], "Sapphire")  # or Gul Ahmed (both tied at top)
+        # JEEM should be ranked below the major enterprise peers
+        self.assertNotIn("JEEM", top_names[:3])
+
+    def test_startup_client_ranks_boutique_peers_with_benchmark(self):
+        """Startup/boutique client must rank boutique peers first, plus 1 benchmark giant."""
+        from app.services.competitive import _filter_niche_competitors, _PEER_BOUTIQUE
+
+        candidates = [
+            # Category giant benchmark
+            {
+                "name": "Khaadi",
+                "website": "https://www.khaadi.com",
+                "overlap_score": 85.0,
+                "market_scale": "enterprise",
+                "co_occurrence_count": 3,
+            },
+            {
+                "name": "Sapphire",
+                "website": "https://pk.sapphireonline.pk",
+                "overlap_score": 85.0,
+                "market_scale": "enterprise",
+                "co_occurrence_count": 2,
+            },
+            # Direct boutique peers
+            {
+                "name": "Indie Studio A",
+                "website": "https://indiestudioa.pk",
+                "overlap_score": 88.0,
+                "market_scale": "boutique",
+                "co_occurrence_count": 1,
+            },
+            {
+                "name": "Indie Studio B",
+                "website": "https://indiestudiob.pk",
+                "overlap_score": 84.0,
+                "market_scale": "boutique",
+                "co_occurrence_count": 1,
+            },
+            {
+                "name": "Indie Studio C",
+                "website": "https://indiestudioc.pk",
+                "overlap_score": 82.0,
+                "market_scale": "boutique",
+                "co_occurrence_count": 1,
+            },
+            {
+                "name": "Indie Studio D",
+                "website": "https://indiestudiod.pk",
+                "overlap_score": 80.0,
+                "market_scale": "boutique",
+                "co_occurrence_count": 1,
+            },
+        ]
+
+        kept = _filter_niche_competitors(
+            candidates,
+            "Local Pret Atelier",
+            market_area="Pakistan",
+            niche="Boutique Luxury Pret",
+            industry="Apparel, Fashion & Luxury",
+            business_model="b2c_retail",
+            limit=5,
+            client_peer_scale=_PEER_BOUTIQUE,
+        )
+
+        top_names = [c["name"] for c in kept]
+        # First 4 slots should be dominated by boutique peers
+        self.assertEqual(top_names[0], "Indie Studio A")
+        self.assertEqual(top_names[1], "Indie Studio B")
+        self.assertEqual(top_names[2], "Indie Studio C")
+        # The 5th slot should be the top Category Benchmark (Khaadi)
+        self.assertIn("Khaadi", top_names)
+
+    def test_co_occurrence_prominence_boost(self):
+        """Candidates with multiple co-occurrences receive ranking boost."""
+        from app.services.competitive import _filter_niche_competitors, _PEER_MID
+
+        candidates = [
+            # Candidate with high overlap but 1 co-occurrence
+            {
+                "name": "Brand Single Hit",
+                "website": "https://singlehit.pk",
+                "overlap_score": 80.0,
+                "market_scale": "mid_market",
+                "co_occurrence_count": 1,
+            },
+            # Candidate with slightly lower overlap but 3 co-occurrences across queries
+            {
+                "name": "Brand Multi Hit",
+                "website": "https://multihit.pk",
+                "overlap_score": 75.0,
+                "market_scale": "mid_market",
+                "co_occurrence_count": 3,
+            },
+        ]
+
+        kept = _filter_niche_competitors(
+            candidates,
+            "Mid Market Brand",
+            limit=2,
+            client_peer_scale=_PEER_MID,
+        )
+
+        # Multi Hit gets (75*0.6) + 25 + 15 = 85.0
+        # Single Hit gets (80*0.6) + 25 + 0 = 73.0
+        self.assertEqual(kept[0]["name"], "Brand Multi Hit")
+        self.assertEqual(kept[1]["name"], "Brand Single Hit")
+
+
 
 
 

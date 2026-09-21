@@ -231,6 +231,94 @@ async def scrape_website(db: AsyncSession, agency_id: str, url: str) -> dict[str
         return await _scrape_direct_html(url)
 
 
+async def _direct_search_fallback(query: str, location: str | None = None) -> list[dict]:
+    """Resilient search fallback when SerpAPI quota is exhausted, unauthorized, or times out."""
+    import urllib.parse
+    import xml.etree.ElementTree as ET
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    q = query.strip()
+    if location and location.lower() not in q.lower():
+        q = f"{q} in {location}"
+
+    # Engine 1: Bing RSS (reliable, unblocked XML feed with organic titles, links, and snippets)
+    try:
+        bing_url = f"https://www.bing.com/search?format=rss&q={urllib.parse.quote_plus(q)}"
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            resp = await client.get(bing_url, headers=headers)
+            if resp.status_code == 200 and "<item>" in resp.text:
+                root = ET.fromstring(resp.text)
+                items = root.findall(".//item")
+                results = []
+                for it in items:
+                    raw_title = it.findtext("title") or ""
+                    link = (it.findtext("link") or "").strip()
+                    desc = it.findtext("description") or ""
+                    title = html.unescape(re.sub(r"<[^>]+>", "", raw_title)).strip()
+                    snippet = html.unescape(re.sub(r"<[^>]+>", "", desc)).strip()
+                    if link and title:
+                        results.append({
+                            "position": len(results) + 1,
+                            "title": title,
+                            "link": link,
+                            "snippet": snippet,
+                        })
+                if results:
+                    return results[:10]
+    except Exception as exc:
+        logger.debug("Bing RSS search fallback failed for '%s': %s", q, exc)
+
+    # Engine 2: DuckDuckGo HTML scrape (secondary fallback)
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            resp = await client.post(
+                "https://html.duckduckgo.com/html/",
+                data={"q": q},
+                headers=headers,
+            )
+            if resp.status_code == 200:
+                results = []
+                blocks = re.split(r'<div[^>]+class=[\'"]result\s+results_links[^>]*>', resp.text)
+                for b in blocks[1:]:
+                    url_m = re.search(r'<a[^>]+class=[\'"]result__snippet[^>]*href=[\'"]([^\'"]+)[\'"]', b)
+                    if not url_m:
+                        url_m = re.search(r'<a[^>]+class=[\'"]result__url[^>]*href=[\'"]([^\'"]+)[\'"]', b)
+                    title_m = re.search(r'<h2[^>]*class=[\'"]result__title[^>]*>.*?<a[^>]*>(.*?)</a>', b, re.DOTALL)
+                    snip_m = re.search(r'<a[^>]+class=[\'"]result__snippet[^>]*>(.*?)</a>', b, re.DOTALL)
+
+                    raw_url = url_m.group(1) if url_m else ""
+                    if "uddg=" in raw_url:
+                        parsed_q = urllib.parse.parse_qs(urllib.parse.urlparse(raw_url).query)
+                        actual_url = parsed_q.get("uddg", [raw_url])[0]
+                    else:
+                        actual_url = raw_url
+
+                    title = re.sub(r"<[^>]+>", "", title_m.group(1)).strip() if title_m else ""
+                    title = html.unescape(title)
+                    snippet = re.sub(r"<[^>]+>", "", snip_m.group(1)).strip() if snip_m else ""
+                    snippet = html.unescape(snippet)
+
+                    if actual_url and title:
+                        results.append({
+                            "position": len(results) + 1,
+                            "title": title,
+                            "link": actual_url,
+                            "snippet": snippet,
+                        })
+                if results:
+                    return results[:10]
+    except Exception as exc:
+        logger.warning("Direct search fallback failed for '%s': %s", query, exc)
+    return []
+
+
 async def serp_visibility(
     db: AsyncSession,
     agency_id: str,
@@ -242,6 +330,9 @@ async def serp_visibility(
     key = await resolve_serp(db, agency_id)
     platform = (settings.serp_api or "").strip()
     if not key:
+        fallback_organic = await _direct_search_fallback(query, location=location)
+        if fallback_organic:
+            return {"query": query, "status": "ok", "organic": fallback_organic, "source": "direct_search_fallback"}
         return {"query": query, "status": "skipped", "organic": [], "detail": "No platform SerpAPI key configured"}
     try:
         await ensure_scrape_quota(db, agency_id)
@@ -272,11 +363,14 @@ async def serp_visibility(
 
         if response.status_code >= 400:
             logger.warning(
-                "SerpAPI error status=%s query=%s detail=%s",
+                "SerpAPI error status=%s query=%s detail=%s — attempting direct search fallback",
                 response.status_code,
                 query[:120],
                 response.text[:200],
             )
+            fallback_organic = await _direct_search_fallback(query, location=location)
+            if fallback_organic:
+                return {"query": query, "status": "ok", "organic": fallback_organic, "source": "direct_search_fallback"}
             return {
                 "query": query,
                 "status": "unauthorized" if response.status_code in {401, 403} else "error",
@@ -296,6 +390,9 @@ async def serp_visibility(
         ]
         return {"query": query, "status": "ok", "organic": organic}
     except Exception as exc:
+        fallback_organic = await _direct_search_fallback(query, location=location)
+        if fallback_organic:
+            return {"query": query, "status": "ok", "organic": fallback_organic, "source": "direct_search_fallback"}
         return {"query": query, "status": "error", "detail": str(exc)[:500], "organic": []}
 
 

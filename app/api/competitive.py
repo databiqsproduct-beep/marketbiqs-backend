@@ -768,11 +768,17 @@ async def client_workspace(
         _looks_like_content_or_cpg_noise,
         _is_blog_or_article_url,
         _is_serp_noise_domain,
+        _is_global_megarival,
+        _rival_fits_run_scope,
+        _city_from_client,
+        _detect_industry_category,
+        _clean_rival_display_name,
     )
 
     # Instantly hide brand-geo hallucinations + wrong food-format / wrong-vertical peers
     # (e.g. burger brands for a cafe client, NetSol for Cheezious) without waiting for another intel run.
     market_hint = _market_area_from_client(client) or "Pakistan"
+    client_city = _city_from_client(client)
     dirty = (
         await db.execute(
             select(Competitor).where(
@@ -803,8 +809,9 @@ async def client_workspace(
             source="ai",
         )
         if not drop and client_fmt and client_fmt != "general":
+            # Candidate self-identity ONLY: NO why_dangerous
             rival_fmt = _food_format_from_blob(
-                rival.name, rival.description, rival.why_dangerous, rival.website
+                rival.name, rival.description, rival.website
             )
             if rival_fmt != "general" and not _food_format_compatible(client_fmt, rival_fmt):
                 drop = True
@@ -819,34 +826,65 @@ async def client_workspace(
             or _looks_like_content_or_cpg_noise(rival.name, rival.website)
             or _is_blog_or_article_url(rival.website or "", rival.name)
             or _is_serp_noise_domain(rival.website or "")
+            or _is_global_megarival(rival.name, rival.website)
         ):
             drop = True
         if not drop and client_is_food:
             if _looks_like_furniture_or_home_brand(
-                rival.name, rival.description, rival.why_dangerous, rival.website
+                rival.name, rival.description, rival.website
             ):
                 drop = True
             elif _food_local_name_denied(rival.name, market_hint):
                 drop = True
             elif _looks_like_software_peer_client(
-                rival.name, rival.description, rival.why_dangerous, rival.website
+                rival.name, rival.description, rival.website
             ):
                 drop = True
             elif _looks_like_fmcg_or_snack_brand(
-                rival.name, rival.description, rival.why_dangerous, rival.website
+                rival.name, rival.description, rival.website
             ) or _looks_like_marketing_slogan_name(rival.name):
                 drop = True
+        client_is_software = _looks_like_software_peer_client(
+            client.name, client.industry, client.niche, client.notes
+        ) or (_detect_industry_category(client.industry, client.niche, client.name) in {"software", "data_ai"})
+        if not drop and not client_is_software:
+            if _looks_like_software_peer_client(rival.name, rival.description, rival.website):
+                drop = True
         if not drop:
+            # Candidate self-identity ONLY: NO why_dangerous
+            rival_self_blob = f"{rival.name} {rival.website or ''} {rival.description or ''}"
             if _incompatible_peer(
                 client_model=client_model,
                 client_industry=client.industry or "",
                 client_niche=(client.niche or client.notes or ""),
                 rival_model="",
                 rival_industry="",
-                rival_blob=f"{rival.name} {rival.description or ''} {rival.why_dangerous or ''}",
+                rival_blob=rival_self_blob,
                 client_name=client.name,
             ):
                 drop = True
+        # Strict city-level and locality gating
+        if not drop:
+            fits_scope = _rival_fits_run_scope(
+                name=rival.name,
+                website=rival.website,
+                headquarters=rival.headquarters,
+                description=rival.description,
+                why=rival.why_dangerous,
+                scope="local",
+                market=market_hint,
+                city=client_city,
+                client_name=client.name,
+                is_pinned=False,
+                strict=bool(client_city),
+            )
+            if not fits_scope:
+                drop = True
+        if not drop:
+            cleaned_name = _clean_rival_display_name(rival.name)
+            if cleaned_name and cleaned_name != rival.name:
+                rival.name = cleaned_name
+                cleaned += 1
         if drop:
             rival.is_tracking = False
             rival.is_pinned = False
@@ -865,6 +903,100 @@ async def client_workspace(
             .order_by(Competitor.is_pinned.desc(), Competitor.overlap_score.desc())
         )
     ).scalars().all()
+
+    # Self-healing: if dropping invalid peers leaves fewer than 5 active competitors,
+    # promote the top eligible genuine untracked peers already in DB for this client.
+    if len(competitors) < 5:
+        needed_slots = 5 - len(competitors)
+        untracked_candidates = (
+            await db.execute(
+                select(Competitor)
+                .where(
+                    Competitor.client_id == client.id,
+                    Competitor.agency_id == ctx.agency.id,
+                    Competitor.is_tracking.is_(False),
+                )
+                .order_by(Competitor.overlap_score.desc())
+            )
+        ).scalars().all()
+        promoted = 0
+        for cand in untracked_candidates:
+            cand_l = (cand.name or "").lower()
+            if "xinyaki" in cand_l:
+                continue
+            if (
+                _is_generic_or_fake_rival_name(cand.name)
+                or _looks_like_invented_food_domain(cand.name, cand.website)
+                or _is_self_rival(client.name, cand.name, website=cand.website, client_website=client.website)
+                or _looks_like_content_or_cpg_noise(cand.name, cand.website)
+                or _is_blog_or_article_url(cand.website or "", cand.name)
+                or _is_serp_noise_domain(cand.website or "")
+                or _is_global_megarival(cand.name, cand.website)
+            ):
+                continue
+            if not client_is_software and _looks_like_software_peer_client(
+                cand.name, cand.description, cand.website
+            ):
+                continue
+            if client_is_food:
+                if _looks_like_furniture_or_home_brand(
+                    cand.name, cand.description, cand.website
+                ):
+                    continue
+                if _food_local_name_denied(cand.name, market_hint):
+                    continue
+                if _looks_like_fmcg_or_snack_brand(
+                    cand.name, cand.description, cand.website
+                ) or _looks_like_marketing_slogan_name(cand.name):
+                    continue
+                cand_fmt = _food_format_from_blob(cand.name, cand.description, cand.website)
+                if client_fmt and client_fmt != "general" and cand_fmt != "general" and not _food_format_compatible(client_fmt, cand_fmt):
+                    continue
+            cand_self_blob = f"{cand.name} {cand.website or ''} {cand.description or ''}"
+            if _incompatible_peer(
+                client_model=client_model,
+                client_industry=client.industry or "",
+                client_niche=(client.niche or client.notes or ""),
+                rival_model="",
+                rival_industry="",
+                rival_blob=cand_self_blob,
+                client_name=client.name,
+            ):
+                continue
+            if not _rival_fits_run_scope(
+                name=cand.name,
+                website=cand.website,
+                headquarters=cand.headquarters,
+                description=cand.description,
+                why=cand.why_dangerous,
+                scope="local",
+                market=market_hint,
+                city=client_city,
+                client_name=client.name,
+                is_pinned=False,
+                strict=bool(client_city),
+            ):
+                continue
+            cleaned_cand_name = _clean_rival_display_name(cand.name)
+            if cleaned_cand_name:
+                cand.name = cleaned_cand_name
+            cand.is_tracking = True
+            promoted += 1
+            if promoted >= needed_slots:
+                break
+        if promoted > 0:
+            await db.commit()
+            competitors = (
+                await db.execute(
+                    select(Competitor)
+                    .where(
+                        Competitor.client_id == client.id,
+                        Competitor.agency_id == ctx.agency.id,
+                        Competitor.is_tracking.is_(True),
+                    )
+                    .order_by(Competitor.is_pinned.desc(), Competitor.overlap_score.desc())
+                )
+            ).scalars().all()
     feature_rows = (
         await db.execute(
             select(ProductFeature)

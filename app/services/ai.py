@@ -61,7 +61,13 @@ def _is_rate_limited(exc: BaseException) -> bool:
 
 def _is_context_length_exceeded(exc: BaseException) -> bool:
     text = str(exc).lower()
-    return "context_length_exceeded" in text or "reduce the length of the messages" in text
+    return (
+        "context_length_exceeded" in text
+        or "reduce the length of the messages" in text
+        or "request_too_large" in text
+        or "request entity too large" in text
+        or "413" in text
+    )
 
 
 def _retry_after_seconds(exc: BaseException) -> float:
@@ -367,7 +373,14 @@ def _extract_json_object(raw: str) -> dict[str, Any] | None:
         start_obj = text.find("{")
         end_obj = text.rfind("}")
         if start_obj >= 0 and end_obj > start_obj:
-            parsed = json.loads(text[start_obj : end_obj + 1])
+            candidate_json = text[start_obj : end_obj + 1]
+            try:
+                parsed = json.loads(candidate_json)
+            except Exception:
+                # Handle common LLM syntax anomalies: duplicated braces or trailing commas
+                cleaned = re.sub(r"\}\s*\},", "},", candidate_json)
+                cleaned = re.sub(r",\s*([}\]])", r"\1", cleaned)
+                parsed = json.loads(cleaned)
             if isinstance(parsed, dict):
                 for wrapper in ("profile", "result", "data", "output", "response"):
                     if wrapper in parsed and isinstance(parsed[wrapper], dict) and len(parsed) == 1:

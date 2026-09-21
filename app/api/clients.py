@@ -3,11 +3,27 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+import logging
 from app.deps import AuthContext, get_auth_context, get_tenant_client
 from app.models import ClientBrand, Competitor, FeatureTicket, GoalAlert, ProductFeature, Report
-from app.schemas import ClientCreate, ClientOut, ClientUpdate, CompetitorCreate, CompetitorOut
+from app.schemas import (
+    ClientCreate,
+    ClientOut,
+    ClientUpdate,
+    CompetitorCreate,
+    CompetitorOut,
+    NicheDetectionRequest,
+    NicheDetectionResponse,
+)
 from app.services.billing import ensure_client_capacity, max_tracked_rivals
-from app.services.competitive import collapse_duplicate_competitors, _find_matching_competitor
+from app.services.competitive import (
+    collapse_duplicate_competitors,
+    _find_matching_competitor,
+    _extract_metadata_from_notes,
+)
+from app.services.niche_detection import detect_brand_niche
+
+logger = logging.getLogger("marketbiqs.clients")
 
 router = APIRouter(prefix="/clients", tags=["clients"])
 
@@ -197,6 +213,67 @@ async def update_client(
         setattr(client, key, value)
     await db.flush()
     return (await _bulk_enrich_clients(db, [client]))[0]
+
+
+@router.post("/detect-niche", response_model=NicheDetectionResponse)
+async def detect_niche_endpoint(
+    payload: NicheDetectionRequest,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Auto-detect exact business niche, canonical industry, and primary offering
+    using dual-evidence grounding (scraped site + live search snippets).
+    """
+    try:
+        return await detect_brand_niche(
+            db,
+            ctx.agency.id,
+            name=payload.name,
+            website=payload.website,
+            country=payload.country,
+            city=payload.city,
+            notes=payload.notes,
+            primary_offering=payload.primary_offering,
+        )
+    except Exception as exc:
+        logger.warning("Niche auto-detection failed for '%s': %s", payload.name, exc)
+        raise HTTPException(status_code=500, detail=f"Niche auto-detection failed: {exc}") from exc
+
+
+@router.post("/{client_id}/detect-niche", response_model=NicheDetectionResponse)
+async def detect_client_niche_by_id(
+    client: ClientBrand = Depends(get_tenant_client),
+    apply_to_client: bool = False,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Auto-detect exact business niche for an existing client in the workspace.
+    Optionally updates and saves the detected niche to the client record if apply_to_client=true.
+    """
+    notes_meta = _extract_metadata_from_notes(client.notes)
+    detected = await detect_brand_niche(
+        db,
+        ctx.agency.id,
+        name=client.name,
+        website=client.website,
+        country=notes_meta.get("country"),
+        city=notes_meta.get("city"),
+        notes=client.notes,
+        primary_offering=notes_meta.get("primary_offering"),
+    )
+    if apply_to_client:
+        client.niche = detected.niche
+        client.industry = detected.industry
+        client.notes = _merge_notes_with_metadata(
+            client.notes,
+            niche=detected.niche,
+            primary_offering=detected.primary_offering,
+            customer_type=detected.customer_type,
+        )
+        await db.flush()
+    return detected
 
 
 @router.delete("/{client_id}")
