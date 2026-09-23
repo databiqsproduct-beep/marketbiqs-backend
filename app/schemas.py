@@ -87,6 +87,26 @@ class MemberOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class NicheDetectionRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    website: str | None = None
+    country: str | None = None
+    city: str | None = None
+    notes: str | None = None
+    primary_offering: str | None = None
+
+
+class NicheDetectionResponse(BaseModel):
+    industry: str
+    niche: str
+    primary_offering: str
+    customer_type: str = "General Consumer"
+    business_model: str = "services"
+    confidence: float = 0.90
+    evidence: str = ""
+    suggested_alternatives: list[str] = Field(default_factory=list)
+
+
 class ClientCreate(BaseModel):
     name: str
     industry: str | None = None
